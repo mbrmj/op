@@ -2,53 +2,43 @@
 - name: Check firewall status
   block:
     - name: Check if firewalld is installed and running
-      shell: systemctl status firewalld | grep -i running | wc -l
+      command: systemctl status firewalld | grep -i running | wc -l
       register: firewalld_status
       changed_when: false
       failed_when: false
 
     - name: Check if iptables service is installed and running
-      shell: iptables -L -n | wc -l
+      command: iptables -L -n | wc -l
       register: iptables_status
       changed_when: false
       failed_when: false
 
-    - name: Check if ufw is installed and running
-      shell: ufw status | grep -i "Status: active" | wc -l
-      register: ufw_status
-      changed_when: false
-      failed_when: false
+
 
     - name: Get firewalld open ports if running
-      shell: firewall-cmd --list-all | grep ports | sed 's/ports://' | tr -d ' '
+      command: firewall-cmd --list-all | grep ports | sed 's/ports://' | tr -d ' '
       register: firewalld_ports
       changed_when: false
       failed_when: false
       when: firewalld_status.stdout|int > 0
 
     - name: Get iptables open ports
-      shell: iptables -L -n | grep ACCEPT | grep -v "0.0.0.0/0" | grep "dpt:" | sed 's/.*dpt://' | sed 's/ .*//' | sort | uniq
+      command: iptables -L -n | grep ACCEPT | grep -v "0.0.0.0/0" | grep "dpt:" | sed 's/.*dpt://' | sed 's/ .*//' | sort | uniq
       register: iptables_ports
       changed_when: false
       failed_when: false
       when: iptables_status.stdout|int > 10
       
-    - name: Get ufw open ports
-      shell: ufw status | grep ALLOW | awk '{print $1}' | sort -u
-      register: ufw_ports
-      changed_when: false
-      failed_when: false
-      when: ufw_status.stdout|int > 0
+
       
     - name: Determine firewall type
       set_fact:
-        firewall_type: "{{ 'firewalld' if firewalld_status.stdout|int > 0 else ('ufw' if ufw_status.stdout|int > 0 else ('iptables' if iptables_status.stdout|int > 10 else 'none')) }}"
+        firewall_type: "firewalld"
         
     - name: Combine open ports
       set_fact:
         open_ports: "{{ (firewalld_ports.stdout_lines if firewalld_status.stdout|int > 0 else []) + 
-                        (iptables_ports.stdout_lines if iptables_status.stdout|int > 10 else []) +
-                        (ufw_ports.stdout_lines if ufw_status.stdout|int > 0 else []) }}"
+                        (iptables_ports.stdout_lines if iptables_status.stdout|int > 10 else [])"
         
     - name: Determine expected open ports for this host type
       set_fact:
