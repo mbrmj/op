@@ -1,0 +1,77 @@
+---
+# Check if RabbitMQ is installed
+- name: Check if RabbitMQ is installed
+  shell: command -v rabbitmqctl && (rpm -qa | grep -i rabbitmq || dpkg -l | grep -i rabbitmq)
+  register: rabbitmq_check
+  changed_when: false
+  failed_when: false
+
+# Get RabbitMQ version
+- name: Get RabbitMQ version
+  shell: rabbitmqctl version
+  register: rabbitmq_version
+  changed_when: false
+  failed_when: false
+  when: rabbitmq_check.rc == 0
+
+# Check if RabbitMQ service exists
+- name: Check if RabbitMQ service exists
+  shell: systemctl list-units --type=service | grep -i rabbit | awk '{print $1}'
+  register: rabbitmq_service
+  changed_when: false
+  failed_when: false
+
+# Check RabbitMQ service status
+- name: Check RabbitMQ service status
+  shell: systemctl is-active $(systemctl list-units --type=service | grep -i rabbit | awk '{print $1}' | head -1)
+  register: rabbitmq_status
+  changed_when: false
+  failed_when: false
+  when: rabbitmq_service.stdout_lines | default([]) | length > 0
+
+# Get cluster status (if it's a cluster)
+- name: Get RabbitMQ cluster status
+  shell: rabbitmqctl cluster_status
+  register: rabbitmq_cluster
+  changed_when: false
+  failed_when: false
+  when: rabbitmq_check.rc == 0
+
+# Get list of queues
+- name: Get RabbitMQ queues
+  shell: rabbitmqctl list_queues name messages | grep -v "Listing queues" | head -10
+  register: rabbitmq_queues
+  changed_when: false
+  failed_when: false
+  when: rabbitmq_check.rc == 0
+
+# Get ports in use
+- name: Find active RabbitMQ ports
+  shell: |
+    netstat -tulpn | grep beam | grep LISTEN | awk '{print $4}' | awk -F: '{print $NF}' || \
+    ss -tulpn | grep beam | grep LISTEN | awk '{print $5}' | awk -F: '{print $NF}'
+  register: rabbitmq_ports
+  changed_when: false
+  failed_when: false
+  when: rabbitmq_check.rc == 0
+
+# Store RabbitMQ information
+- name: Store RabbitMQ information
+  set_fact:
+    rabbitmq_info:
+      installed: "{{ rabbitmq_check.rc == 0 }}"
+      version: "{{ rabbitmq_version.stdout | default('Not Installed') if rabbitmq_check.rc == 0 else 'Not Installed' }}"
+      service: "{{ rabbitmq_service.stdout_lines | default([]) }}"
+      status: "{{ rabbitmq_status.stdout | default('Not Running') if rabbitmq_service.stdout_lines | default([]) | length > 0 else 'No Service' }}"
+      is_cluster: "{{ 'nodes' in rabbitmq_cluster.stdout | default('') if rabbitmq_check.rc == 0 else false }}"
+      cluster_info: "{{ rabbitmq_cluster.stdout_lines | default([]) | select('search', 'nodes') | list }}"
+      queues: "{{ rabbitmq_queues.stdout_lines | default([]) }}"
+      ports: "{{ rabbitmq_ports.stdout_lines | default([]) if rabbitmq_check.rc == 0 else [] }}"
+
+# Save RabbitMQ data to local fact file
+- name: Save RabbitMQ data to local fact file
+  copy:
+    content: "{{ rabbitmq_info | to_nice_json }}"
+    dest: "{{ local_report_path }}/facts/{{ inventory_hostname }}/rabbitmq.json"
+  delegate_to: localhost
+  become: no

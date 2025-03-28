@@ -1,0 +1,116 @@
+---
+- name: Detect NFS server installation
+  block:
+    - name: Set NFS installation fact based on inventory group
+      set_fact:
+        nfs_installed: true
+      when: host_facts.server_type.is_nfs | bool
+
+    - name: Check for NFS processes
+      shell: pgrep -f "nfsd|rpc.mountd" | wc -l
+      register: nfs_process_check
+      changed_when: false
+      failed_when: false
+      when: nfs_installed|bool
+
+    - name: Auto-detect NFS service name
+      shell: systemctl list-units --type=service | grep -iE 'nfs-server|nfs-kernel-server|nfs' | awk '{print $1}' | grep -o '[^.]*'
+      register: nfs_service_name_result
+      changed_when: false
+      failed_when: false
+      when: nfs_installed|bool
+
+    - name: Set NFS service name fact
+      set_fact:
+        nfs_service_name: "{{ nfs_service_name_result.stdout_lines[0] | default('nfs-server') }}"
+      when: nfs_installed|bool and nfs_service_name_result.stdout_lines is defined and nfs_service_name_result.stdout_lines|length > 0
+
+    - name: Check NFS service status
+      systemd:
+        name: "{{ nfs_service_name }}"
+      register: nfs_service_status
+      failed_when: false
+      changed_when: false
+      when: nfs_installed|bool and nfs_service_name is defined
+
+    - name: Check NFS port status
+      wait_for:
+        host: "{{ ansible_default_ipv4.address }}"
+        port: "{{ item }}"
+        timeout: 5
+        state: started
+      register: nfs_port_status
+      with_items: "{{ nfs_ports | default([111, 2049, 4000, 4001, 4002]) }}"
+      failed_when: false
+      when: nfs_installed|bool
+
+    - name: Get NFS export list
+      shell: exportfs -v | wc -l
+      register: nfs_exports_count
+      failed_when: false
+      changed_when: false
+      when: nfs_installed|bool
+
+    - name: Get NFS client connections
+      shell: ss -t state established '( dport = :2049 or sport = :2049 )' | grep -v "Address" | wc -l
+      register: nfs_client_connections
+      failed_when: false
+      changed_when: false
+      when: nfs_installed|bool
+
+    - name: Get NFS mount stats
+      shell: nfsstat -s | grep -i "read\\|write" | awk '{print $1 " " $2}'
+      register: nfs_stats
+      failed_when: false
+      changed_when: false
+      when: nfs_installed|bool
+
+    - name: Check current load on NFS server
+      shell: top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}'
+      register: nfs_cpu_usage
+      changed_when: false
+      failed_when: false
+      when: nfs_installed|bool
+
+    - name: Get NFS server shares
+      shell: showmount -e localhost 2>/dev/null || echo "Unable to list exports"
+      register: nfs_shares
+      failed_when: false
+      changed_when: false
+      when: nfs_installed|bool
+
+    - name: Create NFS facts dictionary
+      set_fact:
+        nfs_facts:
+          installed: "{{ nfs_installed|bool }}"
+          service_name: "{{ nfs_service_name | default('nfs-server') if nfs_installed|bool else 'not_installed' }}"
+          status: "{{ (nfs_service_status.status.Status is defined and nfs_service_status.status.Status == 'running') or (nfs_process_check.stdout|default('0')|int > 0) if nfs_installed|bool else false }}"
+          ports: "{{ nfs_port_status.results | map(attribute='item') | select('defined') | list | join(';') if nfs_installed|bool else '' }}"
+          exports_count: "{{ nfs_exports_count.stdout|int if nfs_exports_count.stdout|default('0')|int > 0 else 0 }}"
+          client_connections: "{{ nfs_client_connections.stdout|int if nfs_client_connections.stdout|default('0')|int > 0 else 0 }}"
+          shares: "{{ nfs_shares.stdout_lines | default(['No shares found']) }}"
+          cpu_usage: "{{ nfs_cpu_usage.stdout|float|round(1) if nfs_cpu_usage.stdout|default('0')|float > 0 else 0 }}"
+          stats: "{{ nfs_stats.stdout_lines | default([]) }}"
+          port_status: "{{ dict(nfs_port_status.results | map(attribute='item') | select('defined') | list | 
+                        zip(nfs_port_status.results | map(attribute='state') | select('defined') | list)) 
+                        if nfs_installed|bool else {} }}"
+      when: nfs_installed is defined
+
+    - name: Update host facts with NFS information
+      set_fact:
+        host_facts: "{{ host_facts | combine({'nfs': nfs_facts}) }}"
+      when: nfs_facts is defined
+
+    - name: Update overall status based on NFS status
+      set_fact:
+        host_facts: "{{ host_facts | combine({'overall_status': 'critical'}) }}"
+      when: 
+        - nfs_facts is defined
+        - nfs_facts.installed|bool
+        - not nfs_facts.status|bool
+
+    - name: Write updated host facts to file
+      copy:
+        content: "{{ host_facts | to_json }}"
+        dest: "/tmp/ansible_monitoring/{{ inventory_hostname }}.json"
+      delegate_to: localhost

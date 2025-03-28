@@ -1,0 +1,71 @@
+---
+- name: Find Tomcat services
+  shell: systemctl list-units --type=service | grep -i tomcat | awk '{print $1}'
+  register: tomcat_services
+  changed_when: false
+  failed_when: false
+
+- name: Check if Tomcat is installed via package manager
+  shell: command -v java && (rpm -qa | grep -i tomcat || dpkg -l | grep -i tomcat)
+  register: tomcat_package_check
+  changed_when: false
+  failed_when: false
+
+- name: Find Tomcat version
+  shell: |
+    if [ -d /usr/share/tomcat ]; then
+      VERSION_CMD="/usr/share/tomcat/bin/version.sh"
+    elif [ -d /opt/tomcat ]; then
+      VERSION_CMD="/opt/tomcat/bin/version.sh"
+    elif [ -d /var/lib/tomcat ]; then
+      VERSION_CMD="/var/lib/tomcat/bin/version.sh"
+    else
+      VERSION_CMD=$(find / -name "version.sh" -path "*/tomcat*/bin/*" 2>/dev/null | head -1)
+    fi
+    
+    if [ -n "$VERSION_CMD" ] && [ -x "$VERSION_CMD" ]; then
+      $VERSION_CMD | grep "Server version" | awk -F: '{print $2}' | tr -d ' '
+    else
+      echo "Unknown"
+    fi
+  register: tomcat_version
+  changed_when: false
+  failed_when: false
+
+- name: Find active Tomcat ports
+  shell: |
+    netstat -tulpn | grep java | grep LISTEN | awk '{print $4}' | awk -F: '{print $NF}' || \
+    ss -tulpn | grep java | grep LISTEN | awk '{print $5}' | awk -F: '{print $NF}'
+  register: tomcat_ports
+  changed_when: false
+  failed_when: false
+
+- name: Check Tomcat service status
+  shell: |
+    if [ -n "{{ tomcat_services.stdout_lines | default([]) | join('') }}" ]; then
+      SERVICES="{{ tomcat_services.stdout_lines | default([]) | join(' ') }}"
+      for SVC in $SERVICES; do
+        systemctl is-active $SVC && echo "$SVC:active" || echo "$SVC:inactive"
+      done
+    else
+      echo "No Tomcat services found"
+    fi
+  register: tomcat_status
+  changed_when: false
+  failed_when: false
+
+- name: Store Tomcat information
+  set_fact:
+    tomcat_info:
+      services: "{{ tomcat_services.stdout_lines | default([]) }}"
+      version: "{{ tomcat_version.stdout | default('Unknown') }}"
+      ports: "{{ tomcat_ports.stdout_lines | default([]) }}"
+      status: "{{ tomcat_status.stdout_lines | default(['No Tomcat services found']) }}"
+      installed: "{{ tomcat_package_check.rc == 0 }}"
+
+- name: Save Tomcat data to local fact file
+  copy:
+    content: "{{ tomcat_info | to_nice_json }}"
+    dest: "{{ local_report_path }}/facts/{{ inventory_hostname }}/tomcat.json"
+  delegate_to: localhost
+  become: no

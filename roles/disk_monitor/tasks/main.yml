@@ -1,0 +1,103 @@
+---
+- name: Gather disk usage information
+  block:
+    - name: Get disk usage information
+      shell: df -h | grep -v "tmpfs\|devtmpfs\|snap\|udev" | grep "^/" | awk '{print $1 "|" $2 "|" $3 "|" $4 "|" $5 "|" $6}'
+      register: disk_usage
+      changed_when: false
+      failed_when: false
+
+    - name: Parse disk usage output
+      set_fact:
+        disk_partitions: "{{ disk_usage.stdout_lines | map('split', '|') | 
+                            map('list') | 
+                            map('combine', {'device': item[0], 
+                                           'size': item[1], 
+                                           'used': item[2], 
+                                           'available': item[3], 
+                                           'percent': item[4] | trim('%'), 
+                                           'mountpoint': item[5]}) | 
+                            list }}"
+      when: disk_usage.stdout_lines|length > 0
+      loop: "{{ disk_usage.stdout_lines | map('split', '|') }}"
+      loop_control:
+        label: "{{ item[0] }}"
+
+    - name: Set empty disk partitions if none found
+      set_fact:
+        disk_partitions: []
+        disk_status: {}
+      when: disk_usage.stdout_lines is not defined or disk_usage.stdout_lines|length == 0
+
+    - name: Check disk space threshold for each partition
+      set_fact:
+        disk_status: "{{ disk_status | default({}) | combine({item.mountpoint: disk_state}) }}"
+        critical_disks: "{{ critical_disks | default([]) + [item.mountpoint] if disk_state == 'critical' else critical_disks | default([]) }}"
+        warning_disks: "{{ warning_disks | default([]) + [item.mountpoint] if disk_state == 'warning' else warning_disks | default([]) }}"
+      loop: "{{ disk_partitions | default([]) }}"
+      loop_control:
+        label: "{{ item.mountpoint }}"
+      vars:
+        disk_percent: "{{ item.percent|int }}"
+        disk_state: "{{ 'critical' if disk_percent >= disk_critical_threshold|default(90) else ('warning' if disk_percent >= disk_warning_threshold|default(75) else 'ok') }}"
+
+    - name: Get I/O statistics
+      shell: "iostat -d -x | awk 'NR>3 {print $1 \"|\" $4 \"|\" $14}'"
+      register: io_stats
+      changed_when: false
+      failed_when: false
+
+    - name: Parse I/O stats
+      set_fact:
+        io_statistics: "{{ io_stats.stdout_lines | map('split', '|') | 
+                          map('list') | 
+                          map('combine', {'device': item[0], 
+                                         'kB_read_s': item[1], 
+                                         'util_percent': item[2]}) | 
+                          list }}"
+      when: io_stats.stdout_lines|length > 0
+      loop: "{{ io_stats.stdout_lines | map('split', '|') }}"
+      loop_control:
+        label: "{{ item[0] }}"
+
+    - name: Debug disk facts before creating dictionary
+      debug:
+        msg: 
+          - "Disk partitions: {{ disk_partitions | default([]) }}"
+          - "Critical disks: {{ critical_disks | default([]) }}"
+          - "Warning disks: {{ warning_disks | default([]) }}"
+        verbosity: 1
+
+    - name: Create disk facts dictionary
+      set_fact:
+        disk_facts:
+          partitions: "{{ disk_partitions | default([]) }}"
+          status: "{{ disk_status | default({}) }}"
+          io_stats: "{{ io_statistics | default([]) }}"
+          overall_status: "{{ 'critical' if critical_disks|default([])|length > 0 else ('warning' if warning_disks|default([])|length > 0 else 'ok') }}"
+          critical_partitions: "{{ critical_disks | default([]) }}"
+          warning_partitions: "{{ warning_disks | default([]) }}"
+
+    - name: Debug final disk facts
+      debug:
+        msg: "Disk facts for {{ inventory_hostname }}: {{ disk_facts | to_json }}"
+        verbosity: 1
+
+    - name: Update host facts with disk information
+      set_fact:
+        host_facts: "{{ host_facts | combine({'disk': disk_facts}) }}"
+      when: disk_facts is defined
+
+    - name: Update overall status based on disk status
+      set_fact:
+        host_facts: "{{ host_facts | combine({'overall_status': disk_facts.overall_status}) }}"
+      when: 
+        - disk_facts is defined
+        - disk_facts.overall_status != 'ok'
+        - host_facts.overall_status == 'ok'
+
+    - name: Write updated host facts to file
+      copy:
+        content: "{{ host_facts | to_json }}"
+        dest: "/tmp/ansible_monitoring/{{ inventory_hostname }}.json"
+      delegate_to: localhost

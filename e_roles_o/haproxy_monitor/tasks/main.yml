@@ -1,0 +1,81 @@
+---
+- name: Check if HAProxy is installed
+  shell: command -v haproxy && (rpm -qa | grep -i haproxy || dpkg -l | grep -i haproxy)
+  register: haproxy_check
+  changed_when: false
+  failed_when: false
+
+- name: Get HAProxy version
+  shell: haproxy -v | grep -i version | awk '{print $3}'
+  register: haproxy_version
+  changed_when: false
+  failed_when: false
+  when: haproxy_check.rc == 0
+
+- name: Check if HAProxy service exists
+  shell: systemctl list-units --type=service | grep -i haproxy | awk '{print $1}'
+  register: haproxy_service
+  changed_when: false
+  failed_when: false
+
+- name: Check HAProxy service status
+  shell: systemctl is-active haproxy
+  register: haproxy_status
+  changed_when: false
+  failed_when: false
+  when: haproxy_service.stdout_lines | default([]) | length > 0
+
+- name: Check if Keepalived is installed
+  shell: command -v keepalived && (rpm -qa | grep -i keepalived || dpkg -l | grep -i keepalived)
+  register: keepalived_check
+  changed_when: false
+  failed_when: false
+
+- name: Get Keepalived version
+  shell: keepalived -v | grep -i keepalived | head -1 | awk '{print $2}'
+  register: keepalived_version
+  changed_when: false
+  failed_when: false
+  when: keepalived_check.rc == 0
+
+- name: Check if Keepalived service exists
+  shell: systemctl list-units --type=service | grep -i keepalived | awk '{print $1}'
+  register: keepalived_service
+  changed_when: false
+  failed_when: false
+
+- name: Check Keepalived service status
+  shell: systemctl is-active keepalived
+  register: keepalived_status
+  changed_when: false
+  failed_when: false
+  when: keepalived_service.stdout_lines | default([]) | length > 0
+
+- name: Find active HAProxy ports
+  shell: |
+    netstat -tulpn | grep haproxy | grep LISTEN | awk '{print $4}' | awk -F: '{print $NF}' || \
+    ss -tulpn | grep haproxy | grep LISTEN | awk '{print $5}' | awk -F: '{print $NF}'
+  register: haproxy_ports
+  changed_when: false
+  failed_when: false
+  when: haproxy_check.rc == 0
+
+- name: Store HAProxy/Keepalived information
+  set_fact:
+    haproxy_info:
+      haproxy_installed: "{{ haproxy_check.rc == 0 }}"
+      haproxy_version: "{{ haproxy_version.stdout | default('Not Installed') if haproxy_check.rc == 0 else 'Not Installed' }}"
+      haproxy_service: "{{ haproxy_service.stdout_lines | default([]) }}"
+      haproxy_status: "{{ haproxy_status.stdout | default('Not Running') if haproxy_service.stdout_lines | default([]) | length > 0 else 'No Service' }}"
+      haproxy_ports: "{{ haproxy_ports.stdout_lines | default([]) if haproxy_check.rc == 0 else [] }}"
+      keepalived_installed: "{{ keepalived_check.rc == 0 }}"
+      keepalived_version: "{{ keepalived_version.stdout | default('Not Installed') if keepalived_check.rc == 0 else 'Not Installed' }}"
+      keepalived_service: "{{ keepalived_service.stdout_lines | default([]) }}"
+      keepalived_status: "{{ keepalived_status.stdout | default('Not Running') if keepalived_service.stdout_lines | default([]) | length > 0 else 'No Service' }}"
+
+- name: Save HAProxy data to local fact file
+  copy:
+    content: "{{ haproxy_info | to_nice_json }}"
+    dest: "{{ local_report_path }}/facts/{{ inventory_hostname }}/haproxy.json"
+  delegate_to: localhost
+  become: no

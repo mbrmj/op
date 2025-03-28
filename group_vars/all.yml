@@ -1,0 +1,120 @@
+report_path: reports
+
+
+# Global configuration variables
+monitoring_output_dir: "./monitoring_reports"
+report_language: "fr"  # Options: en, fr
+
+# Thresholds for resource monitoring
+cpu_warning_threshold: 70
+cpu_critical_threshold: 90
+memory_warning_threshold: 80
+memory_critical_threshold: 90
+disk_warning_threshold: 75
+disk_critical_threshold: 90
+
+# Service ports to check
+tomcat_ports:
+  - 8080
+  - 8443
+
+haproxy_ports:
+  - 80
+  - 443
+  - 5000  # HAProxy stats
+
+rabbitmq_ports:
+  - 5672  # AMQP
+  - 15672  # Management interface
+  - 25672  # Inter-node communication
+
+# Firewall monitoring settings
+expected_open_ports:
+  tomcat_servers:
+    - 22
+    - 8080
+    - 8443
+  haproxy_servers:
+    - 22
+    - 80
+    - 443
+    - 5000
+  rabbitmq_servers:
+    - 22
+    - 5672
+    - 15672
+    - 25672
+
+# Translation dictionary
+translations:
+  en:
+    title: "Infrastructure Monitoring Report"
+    summary: "System Summary"
+    date: "Report Date"
+    hostname: "Hostname"
+    ip_address: "IP Address"
+    os: "Operating System"
+    uptime: "Uptime"
+    cpu_usage: "CPU Usage"
+    memory_usage: "Memory Usage"
+    swap_usage: "Swap Usage"
+    disk_usage: "Disk Usage"
+    services: "Services"
+    service_status: "Service Status"
+    port_status: "Port Status"
+    firewall: "Firewall Status"
+    selinux: "SELinux Status"
+    rabbitmq: "RabbitMQ Status"
+    not_applicable: "N/A"
+    running: "Running"
+    stopped: "Stopped"
+    open: "Open"
+    closed: "Closed"
+    enabled: "Enabled"
+    disabled: "Disabled"
+    ok: "OK"
+    warning: "Warning"
+    critical: "Critical"
+    not_found: "Not Found"
+    report_overview: "Report Overview"
+    total_servers: "Total Servers"
+    healthy_servers: "Healthy Servers"
+    warning_servers: "Warning Servers"
+    critical_servers: "Critical Servers"
+    version: "Version"
+
+  fr:
+    title: "Rapport de Surveillance d'Infrastructure"
+    summary: "Résumé du Système"
+    date: "Date du Rapport"
+    hostname: "Nom d'Hôte"
+    ip_address: "Adresse IP"
+    os: "Système d'Exploitation"
+    uptime: "Temps de Fonctionnement"
+    cpu_usage: "Utilisation CPU"
+    memory_usage: "Utilisation Mémoire"
+    swap_usage: "Utilisation Swap"
+    disk_usage: "Utilisation Disque"
+    services: "Services"
+    service_status: "État du Service"
+    port_status: "État du Port"
+    firewall: "État du Pare-feu"
+    selinux: "État SELinux"
+    rabbitmq: "État RabbitMQ"
+    not_applicable: "N/A"
+    running: "En Cours d'Exécution"
+    stopped: "Arrêté"
+    open: "Ouvert"
+    closed: "Fermé"
+    enabled: "Activé"
+    disabled: "Désactivé"
+    ok: "OK"
+    warning: "Avertissement"
+    critical: "Critique"
+    not_found: "Non Trouvé"
+    report_overview: "Aperçu du Rapport"
+    total_servers: "Nombre Total de Serveurs"
+    healthy_servers: "Serveurs en Bon État"
+    warning_servers: "Serveurs en Avertissement"
+    critical_servers: "Serveurs en État Critique"
+    version: "Version"

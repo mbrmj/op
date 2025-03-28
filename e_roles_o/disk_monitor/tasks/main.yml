@@ -1,0 +1,103 @@
+---
+- name: Get disk usage information
+  shell: df -h
+  register: disk_usage_human
+  changed_when: false
+  failed_when: false
+
+- name: Get detailed disk information (excluding temporary filesystems)
+  shell: df -TP | grep -v -E 'Filesystem|tmpfs|devtmpfs'
+  register: disk_detail
+  changed_when: false
+  failed_when: false
+
+# Check for LVM PVs (Physical Volumes)
+- name: Get LVM physical volumes
+  shell: command -v pvs && pvs --noheadings -o pv_name | awk '{print $1}'
+  register: lvm_pvs
+  changed_when: false
+  failed_when: false
+  ignore_errors: true
+
+# Get all available disk partitions (including unmounted)
+- name: Get all disk partitions (excluding temporary partitions)
+  shell: lsblk -o NAME,SIZE,TYPE,MOUNTPOINT -n | grep 'part' | grep -v -E 'sr[0-9]|fd[0-9]' | awk '{if($4=="") print $1}'
+  register: unmounted_partitions_raw
+  changed_when: false
+  failed_when: false
+
+# Filter out partitions that are used by LVM
+- name: Filter out LVM-used partitions
+  set_fact:
+    real_unmounted_partitions: []
+  when: unmounted_partitions_raw.stdout_lines | length > 0
+
+- name: Check each partition for LVM usage
+  set_fact:
+    real_unmounted_partitions: "{{ real_unmounted_partitions + [item] }}"
+  with_items: "{{ unmounted_partitions_raw.stdout_lines | default([]) }}"
+  when: 
+    - unmounted_partitions_raw.stdout_lines | length > 0
+    - lvm_pvs.rc != 0 or not ('/dev/' + item in lvm_pvs.stdout_lines)
+    - not (item + ' ' in lvm_pvs.stdout)
+    - not (item in lvm_pvs.stdout)
+
+- name: Initialize disk info
+  set_fact:
+    disk_info:
+      human_readable: "{{ disk_usage_human.stdout_lines | default([]) }}"
+      mounts: []
+      unmounted_partitions: "{{ real_unmounted_partitions | default([]) }}"
+      has_unmounted_disks: "{{ real_unmounted_partitions | default([]) | length > 0 }}"
+      has_high_usage: false
+      has_errors: false
+      error_messages: []
+      using_lvm: "{{ lvm_pvs.rc == 0 and lvm_pvs.stdout | length > 0 }}"
+      lvm_pvs: "{{ lvm_pvs.stdout_lines | default([]) }}"
+
+- name: Process each filesystem entry
+  set_fact:
+    current_entry: "{{ item.split() }}"
+  with_items: "{{ disk_detail.stdout_lines }}"
+  register: processed_entries
+
+- name: Build filesystem entries
+  set_fact:
+    disk_info: "{{ disk_info | combine({
+      'mounts': disk_info.mounts + [{
+        'device': item.ansible_facts.current_entry[0],
+        'fs_type': item.ansible_facts.current_entry[1],
+        'usage_percent': item.ansible_facts.current_entry[5],
+        'mount_point': item.ansible_facts.current_entry[6],
+        'usage_int': item.ansible_facts.current_entry[5] | replace('%', '') | int,
+        'is_network_fs': item.ansible_facts.current_entry[1] in ['nfs', 'nfs4', 'cifs', 'smbfs', 'ncpfs', 'afs', 'glusterfs', 'ceph', 'fuse.sshfs'],
+        'status': 'good' if (item.ansible_facts.current_entry[5] | replace('%', '') | int) < 80
+                  else ('warning' if (item.ansible_facts.current_entry[5] | replace('%', '') | int) < 90 else 'critical')
+      }]     }) }}"
+  with_items: "{{ processed_entries.results }}"
+  when: processed_entries.results | length > 0 and (item.ansible_facts.current_entry[1] != 'tmpfs' and item.ansible_facts.current_entry[1] != 'devtmpfs')
+
+- name: Update high usage flag
+  set_fact:
+    disk_info: "{{ disk_info | combine({
+      'has_high_usage': disk_info.mounts | selectattr('usage_int', 'greaterthan', 79) | list | length > 0     }) }}"
+
+- name: Check for disk errors in dmesg
+  shell: dmesg | grep -i 'error\|fail\|bad\|fault' | grep -i 'sd[a-z]\|hd[a-z]\|disk\|volume' | tail -10
+  register: disk_errors
+  changed_when: false
+  failed_when: false
+  ignore_errors: true
+
+- name: Set disk error flag
+  set_fact:
+    disk_info: "{{ disk_info | combine({
+      'has_errors': disk_errors.rc == 0,
+      'error_messages': disk_errors.stdout_lines | default([])     }) }}"
+
+- name: Save disk data to local fact file
+  copy:
+    content: "{{ disk_info | to_nice_json }}"
+    dest: "{{ local_report_path }}/facts/{{ inventory_hostname }}/disk.json"
+  delegate_to: localhost
+  become: no

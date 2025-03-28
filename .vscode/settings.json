@@ -1,0 +1,7 @@
+{
+    "files.exclude": {
+        "**/e_roles_o/**": true,
+        ".idea": true,
+        ".vscode": true,
+    }
+}

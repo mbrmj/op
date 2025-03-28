@@ -1,0 +1,87 @@
+---
+- name: Create monitoring temp directory
+  file:
+    path: /tmp/ansible_monitoring
+    state: directory
+    mode: 0755
+  delegate_to: localhost
+  run_once: true
+
+- name: Initialize host facts dictionary
+  set_fact:
+    host_facts:
+      hostname: "{{ ansible_hostname }}"
+      ip_address: "{{ ansible_default_ipv4.address | default(ansible_all_ipv4_addresses[0]) }}"
+      os: "{{ ansible_distribution }} {{ ansible_distribution_version }}"
+      uptime: "{{ ansible_uptime_seconds | int // 86400 }}d {{ (ansible_uptime_seconds | int % 86400) // 3600 }}h {{ ((ansible_uptime_seconds | int % 86400) % 3600) // 60 }}m"
+      kernel: "{{ ansible_kernel }}"
+      overall_status: "ok"
+      server_type:
+        is_tomcat: "{{ 'tomcat_servers' in group_names }}"
+        is_haproxy: "{{ 'haproxy_servers' in group_names }}"
+        is_rabbitmq: "{{ 'rabbitmq_servers' in group_names }}"
+        is_drupal: "{{ 'cms' in group_names }}"
+        is_nfs: "{{ 'partage' in group_names }}"
+
+- name: Check if SELinux is available
+  command: which getenforce
+  register: selinux_check
+  changed_when: false
+  failed_when: false
+
+- name: Get SELinux status if available
+  command: getenforce
+  register: selinux_status
+  changed_when: false
+  failed_when: false
+  when: selinux_check.rc == 0
+
+- name: Set SELinux facts
+  set_fact:
+    host_facts: "{{ host_facts | combine({'selinux': selinux_status.stdout | lower}) }}"
+  when: selinux_check.rc == 0
+
+- name: Set SELinux facts when not available
+  set_fact:
+    host_facts: "{{ host_facts | combine({'selinux': 'not_available'}) }}"
+  when: selinux_check.rc != 0
+
+- name: Get network interface information
+  set_fact:
+    host_facts: "{{ host_facts | combine({
+      'interfaces': ansible_interfaces | select('match', '^(eth|ens|eno|enp|wl|bond|br)[0-9]+') | list     }) }}"
+
+- name: Get system timezone
+  set_fact:
+    host_facts: "{{ host_facts | combine({
+      'timezone': ansible_date_time.tz     }) }}"
+
+- name: Check if system is virtual
+  set_fact:
+    host_facts: "{{ host_facts | combine({
+      'is_virtual': ansible_virtualization_role | default('none') != 'host'     }) }}"
+
+- name: Debug server type information
+  debug:
+    msg: "Server {{ inventory_hostname }} is in groups: {{ group_names | join(', ') }} and has server_type: {{ host_facts.server_type | to_json }}"
+    verbosity: 1
+
+- name: Write host facts to file
+  block:
+    - name: Ensure monitoring directory exists
+      file:
+        path: /tmp/ansible_monitoring
+        state: directory
+        mode: 0755
+      delegate_to: localhost
+
+    - name: Debug host facts before writing
+      debug:
+        msg: "Writing facts for {{ inventory_hostname }}: {{ host_facts | to_json }}"
+        verbosity: 1
+
+    - name: Write host facts to file
+      copy:
+        content: "{{ host_facts | to_json }}"
+        dest: "/tmp/ansible_monitoring/{{ inventory_hostname }}.json"
+      delegate_to: localhost

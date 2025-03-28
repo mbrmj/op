@@ -1,0 +1,84 @@
+---
+- name: Gather facts from all hosts
+  hosts: all
+  gather_facts: true
+  tags: always
+
+- name: Common monitoring tasks
+  hosts: all
+  roles:
+    - common
+  tags: 
+    - common
+    - always
+
+- name: Monitor Tomcat servers
+  hosts: tomcat_servers
+  roles:
+    - tomcat_monitor
+  tags:
+    - tomcat
+
+- name: Monitor HAProxy/Keepalived servers
+  hosts: haproxy_servers
+  roles:
+    - haproxy_monitor
+  tags:
+    - haproxy
+
+- name: Monitor RabbitMQ servers
+  hosts: rabbitmq_servers
+  roles:
+    - rabbitmq_monitor
+  tags:
+    - rabbitmq
+
+- name: Monitor disk usage
+  hosts: all
+  roles:
+    - disk_monitor
+  tags:
+    - disk
+
+- name: Monitor system resources
+  hosts: all
+  roles:
+    - system_resources_monitor
+  tags:
+    - system
+
+- name: Monitor firewall configuration
+  hosts: all
+  roles:
+    - firewall_monitor
+  tags:
+    - firewall
+
+
+- name: Monitor Drupal CMS servers
+  hosts: cms:&all
+  roles:
+    - drupal_monitor
+  tags:
+    - drupal
+    - cms
+
+- name: Monitor NFS servers
+  hosts: partage:&all
+  roles:
+    - nfs_monitor
+  tags:
+    - nfs
+    - partage
+
+
+
+- name: Generate monitoring report
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - report_generator
+  tags:
+    - report
+    - always

@@ -1,0 +1,106 @@
+---
+- name: Ensure local report directory exists
+  file:
+    path: "{{ local_report_path }}"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+  become: no
+
+- name: Create timestamp variable
+  set_fact:
+    report_timestamp: "{{ ansible_date_time.iso8601 }}"
+
+# Get a list of all hosts from inventory
+- name: Get all hosts from inventory
+  set_fact:
+    all_inventory_hosts: "{{ groups['all'] | difference(['localhost']) }}"
+  delegate_to: localhost
+  become: no
+
+# Determine which hosts have facts collected
+- name: Gather all facts from local monitoring fact files
+  find:
+    paths: "{{ local_report_path }}/facts"
+    file_type: directory
+  register: fact_host_dirs
+  delegate_to: localhost
+  become: no
+
+- name: Set fact for hosts with collected data
+  set_fact:
+    hosts_with_data: "{{ fact_host_dirs.files | map(attribute='path') | map('basename') | list }}"
+  delegate_to: localhost
+  become: no
+
+# Find unreachable hosts
+- name: Determine unreachable hosts
+  set_fact:
+    unreachable_hosts: "{{ all_inventory_hosts | difference(hosts_with_data) }}"
+  delegate_to: localhost
+  become: no
+
+# Continue with existing tasks
+- name: Find all fact files
+  find:
+    paths: "{{ local_report_path }}/facts"
+    patterns: "*.json"
+    recurse: yes
+  register: fact_files
+  delegate_to: localhost
+  become: no
+
+- name: Read local fact files
+  slurp:
+    src: "{{ item.path }}"
+  register: raw_facts
+  with_items: "{{ fact_files.files }}"
+  delegate_to: localhost
+  become: no
+
+- name: Process facts
+  set_fact:
+    processed_facts: "{{ processed_facts | default({}) | combine({ item.item.path.split('/')[-2]: {} }) }}"
+  with_items: "{{ raw_facts.results }}"
+  when: "item.item.path.split('/')[-2] not in processed_facts | default({})"
+
+- name: Add fact data to processed facts
+  set_fact:
+    processed_facts: "{{ processed_facts | combine({ item.item.path.split('/')[-2]: processed_facts[item.item.path.split('/')[-2]] | combine({ item.item.path.split('/')[-1] | replace('.json', ''): (item.content | b64decode | from_json) }) }) }}"
+  with_items: "{{ raw_facts.results }}"
+
+# Add IP addresses to the processed_facts
+- name: Add IP addresses to the fact data
+  set_fact:
+    processed_facts: "{{ processed_facts | combine({ 
+      item: processed_facts[item] | combine({ 
+        'ip_address': hostvars[item]['ansible_host'] | default('Unknown') 
+      })     }) }}" 
+  with_items: "{{ processed_facts.keys() | list }}"
+  when: hostvars[item] is defined and hostvars[item]['ansible_host'] is defined
+
+# Ensure required disk attributes exist
+- name: Ensure required disk attributes exist
+  set_fact:
+    processed_facts: "{{ processed_facts | combine({
+      item: processed_facts[item] | combine({
+        'disk': (processed_facts[item].disk | default({})) | combine({
+          'has_errors': (processed_facts[item].disk | default({})).has_errors | default(false),
+          'error_messages': (processed_facts[item].disk | default({})).error_messages | default([])
+        })       })     }) }}"
+  with_items: "{{ processed_facts.keys() | list }}"
+  when: processed_facts[item].disk is defined
+
+- name: Generate local HTML report
+  template:
+    src: report.html.j2
+    dest: "{{ local_report_path }}/{{ report_filename }}"
+    mode: '0644'
+  delegate_to: localhost
+  become: no
+  vars:
+    unreachable_hosts_data: "{{ unreachable_hosts }}"
+
+- name: Report success
+  debug:
+    msg: "Report generated successfully at {{ local_report_path }}/{{ report_filename }}"

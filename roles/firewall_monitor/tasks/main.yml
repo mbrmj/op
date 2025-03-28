@@ -1,0 +1,104 @@
+---
+- name: Check firewall status
+  block:
+    - name: Check if firewalld is installed and running
+      shell: systemctl status firewalld | grep -i running | wc -l
+      register: firewalld_status
+      changed_when: false
+      failed_when: false
+
+    - name: Check if iptables service is installed and running
+      shell: iptables -L -n | wc -l
+      register: iptables_status
+      changed_when: false
+      failed_when: false
+
+    - name: Check if ufw is installed and running
+      shell: ufw status | grep -i "Status: active" | wc -l
+      register: ufw_status
+      changed_when: false
+      failed_when: false
+
+    - name: Get firewalld open ports if running
+      shell: firewall-cmd --list-all | grep ports | sed 's/ports://' | tr -d ' '
+      register: firewalld_ports
+      changed_when: false
+      failed_when: false
+      when: firewalld_status.stdout|int > 0
+
+    - name: Get iptables open ports
+      shell: iptables -L -n | grep ACCEPT | grep -v "0.0.0.0/0" | grep "dpt:" | sed 's/.*dpt://' | sed 's/ .*//' | sort | uniq
+      register: iptables_ports
+      changed_when: false
+      failed_when: false
+      when: iptables_status.stdout|int > 10
+      
+    - name: Get ufw open ports
+      shell: ufw status | grep ALLOW | awk '{print $1}' | sort -u
+      register: ufw_ports
+      changed_when: false
+      failed_when: false
+      when: ufw_status.stdout|int > 0
+      
+    - name: Determine firewall type
+      set_fact:
+        firewall_type: "{{ 'firewalld' if firewalld_status.stdout|int > 0 else ('ufw' if ufw_status.stdout|int > 0 else ('iptables' if iptables_status.stdout|int > 10 else 'none')) }}"
+        
+    - name: Combine open ports
+      set_fact:
+        open_ports: "{{ (firewalld_ports.stdout_lines if firewalld_status.stdout|int > 0 else []) + 
+                        (iptables_ports.stdout_lines if iptables_status.stdout|int > 10 else []) +
+                        (ufw_ports.stdout_lines if ufw_status.stdout|int > 0 else []) }}"
+        
+    - name: Determine expected open ports for this host type
+      set_fact:
+        expected_ports: "{{ expected_open_ports[group] if group in expected_open_ports else [] }}"
+      loop: "{{ group_names }}"
+      loop_control:
+        loop_var: group
+
+    - name: Check for missing expected ports
+      set_fact:
+        missing_ports: "{{ expected_ports | difference(open_ports) | default([]) }}"
+        unexpected_ports: "{{ open_ports | difference(expected_ports) | default([]) }}"
+      when: expected_ports is defined and open_ports is defined
+
+    - name: Debug firewall information
+      debug:
+        msg:
+          - "Firewall type: {{ firewall_type | default('unknown') }}"
+          - "Open ports: {{ open_ports | default([]) | join(', ') }}"
+          - "Expected ports: {{ expected_ports | default([]) | join(', ') }}"
+          - "Missing ports: {{ missing_ports | default([]) | join(', ') }}"
+          - "Unexpected ports: {{ unexpected_ports | default([]) | join(', ') }}"
+        verbosity: 1
+
+    - name: Create firewall facts dictionary
+      set_fact:
+        firewall_facts:
+          firewall_type: "{{ firewall_type | default('none') }}"
+          firewall_active: "{{ firewall_type | default('none') != 'none' }}"
+          open_ports: "{{ open_ports | default([]) | join(';') }}"
+          expected_ports: "{{ expected_ports | default([]) | join(';') }}"
+          missing_ports: "{{ missing_ports | default([]) | join(';') }}"
+          unexpected_ports: "{{ unexpected_ports | default([]) | join(';') }}"
+          status: "{{ 'warning' if missing_ports|default([])|length > 0 else 'ok' }}"
+
+    - name: Update host facts with firewall information
+      set_fact:
+        host_facts: "{{ host_facts | combine({'firewall': firewall_facts}) }}"
+      when: firewall_facts is defined
+
+    - name: Update overall status based on firewall status
+      set_fact:
+        host_facts: "{{ host_facts | combine({'overall_status': firewall_facts.status}) }}"
+      when: 
+        - firewall_facts is defined
+        - firewall_facts.status != 'ok'
+        - host_facts.overall_status == 'ok'
+
+    - name: Write updated host facts to file
+      copy:
+        content: "{{ host_facts | to_json }}"
+        dest: "/tmp/ansible_monitoring/{{ inventory_hostname }}.json"
+      delegate_to: localhost

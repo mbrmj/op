@@ -1,0 +1,189 @@
+---
+- name: Create monitoring temp directory
+  file:
+    path: /tmp/ansible_monitoring
+    state: directory
+    mode: 0755
+  delegate_to: localhost
+  run_once: true
+
+- name: Detect Drupal installation
+  block:
+    - name: Set Drupal installation fact based on inventory group
+      set_fact:
+        drupal_installed: true
+      when: host_facts.server_type.is_drupal | bool
+
+    - name: Check for Apache/Nginx processes
+      shell: pgrep -f "apache2|httpd|nginx" | wc -l
+      register: web_process_check
+      changed_when: false
+      failed_when: false
+      when: drupal_installed|bool
+
+    - name: Auto-detect web server service name
+      shell: systemctl list-units --type=service | grep -iE 'apache2|httpd|nginx' | awk '{print $1}' | grep -o '[^.]*'
+      register: web_service_name_result
+      changed_when: false
+      failed_when: false
+      when: drupal_installed|bool
+
+    - name: Set web server service name fact
+      set_fact:
+        web_service_name: "{{ web_service_name_result.stdout_lines[0] | default('apache2') }}"
+      when: drupal_installed|bool and web_service_name_result.stdout_lines is defined and web_service_name_result.stdout_lines|length > 0
+
+    - name: Set default web server name if not detected
+      set_fact:
+        web_service_name: "apache2"
+      when: drupal_installed|bool and (web_service_name is not defined or web_service_name == '')
+
+    - name: Check web server service status
+      systemd:
+        name: "{{ web_service_name }}"
+      register: web_service_status
+      failed_when: false
+      changed_when: false
+      when: drupal_installed|bool and web_service_name is defined
+
+    - name: Check for database processes (MySQL/MariaDB)
+      shell: pgrep -f "mysql|mariadb" | wc -l
+      register: db_process_check
+      changed_when: false
+      failed_when: false
+      when: drupal_installed|bool
+
+    - name: Auto-detect database service name
+      shell: systemctl list-units --type=service | grep -iE 'mysql|mariadb' | awk '{print $1}' | grep -o '[^.]*'
+      register: db_service_name_result
+      changed_when: false
+      failed_when: false
+      when: drupal_installed|bool
+
+    - name: Set database service name fact
+      set_fact:
+        db_service_name: "{{ db_service_name_result.stdout_lines[0] | default('mysql') }}"
+      when: drupal_installed|bool and db_service_name_result.stdout_lines is defined and db_service_name_result.stdout_lines|length > 0
+
+    - name: Set default database name if not detected
+      set_fact:
+        db_service_name: "mysql"
+      when: drupal_installed|bool and (db_service_name is not defined or db_service_name == '')
+
+    - name: Check database service status
+      systemd:
+        name: "{{ db_service_name }}"
+      register: db_service_status
+      failed_when: false
+      changed_when: false
+      when: drupal_installed|bool and db_service_name is defined
+
+    - name: Check web ports status
+      wait_for:
+        host: "{{ ansible_default_ipv4.address }}"
+        port: "{{ item }}"
+        timeout: 5
+        state: started
+      register: web_port_status
+      with_items: "{{ drupal_ports | default([80, 443]) }}"
+      failed_when: false
+      when: drupal_installed|bool
+
+    - name: Detect Drupal installation directories
+      stat:
+        path: "{{ item }}"
+      register: drupal_dirs
+      with_items:
+        - /var/www/html/index.php
+        - /var/www/html/core/misc/drupal.js
+        - /var/www/html/sites/default/settings.php
+      failed_when: false
+      when: drupal_installed|bool
+
+    - name: Try to detect Drupal version
+      shell: >
+        grep -r "const VERSION" /var/www/html/core/includes/bootstrap.inc 2>/dev/null | 
+        grep -o "[0-9]\+\.[0-9]\+" || 
+        grep -r "define('VERSION" /var/www/html/includes/bootstrap.inc 2>/dev/null |
+        grep -o "[0-9]\+\.[0-9]\+"
+      register: drupal_version_result
+      failed_when: false
+      changed_when: false
+      when: drupal_installed|bool
+
+    - name: Get PHP memory usage
+      shell: ps -o rss= -C php-fpm,php7.0-fpm,php7.1-fpm,php7.2-fpm,php7.3-fpm,php7.4-fpm,php8.0-fpm,php8.1-fpm | awk '{sum += $1} END {print sum}'
+      register: php_memory
+      failed_when: false
+      changed_when: false
+      when: drupal_installed|bool
+
+    - name: Check PHP process count
+      shell: ps aux | grep -E 'php-fpm|php[0-9]' | grep -v grep | wc -l
+      register: php_process_count
+      failed_when: false
+      changed_when: false
+      when: drupal_installed|bool
+
+    - name: Debug Drupal information collected
+      debug:
+        msg: 
+          - "Drupal installed: {{ drupal_installed | default(false) }}"
+          - "Web server: {{ web_service_name | default('unknown') }} (Running: {{ (web_service_status.status.Status is defined and web_service_status.status.Status == 'running') | default(false) }})"
+          - "DB server: {{ db_service_name | default('unknown') }} (Running: {{ (db_service_status.status.Status is defined and db_service_status.status.Status == 'running') | default(false) }})"
+          - "Drupal version: {{ drupal_version_result.stdout | default('unknown') }}"
+          - "PHP Memory: {{ (php_memory.stdout | int / 1024) | round | int if php_memory.stdout | default('0') | int > 0 else 0 }} MB"
+          - "PHP Processes: {{ php_process_count.stdout | default('0') | int }}"
+        verbosity: 1
+      when: drupal_installed|bool
+
+    - name: Create Drupal facts dictionary
+      set_fact:
+        drupal_facts:
+          installed: "{{ drupal_installed|bool }}"
+          version: "{{ drupal_version_result.stdout | default('unknown') if drupal_installed|bool else 'not_installed' }}"
+          web_server_type: "{{ web_service_name | default('unknown') if drupal_installed|bool else 'not_installed' }}"
+          db_server_type: "{{ db_service_name | default('unknown') if drupal_installed|bool else 'not_installed' }}"
+          web_server_status: "{{ (web_service_status.status.Status is defined and web_service_status.status.Status == 'running') or (web_process_check.stdout|default('0')|int > 0) if drupal_installed|bool else false }}"
+          db_server_status: "{{ (db_service_status.status.Status is defined and db_service_status.status.Status == 'running') or (db_process_check.stdout|default('0')|int > 0) if drupal_installed|bool else false }}"
+          ports: "{{ web_port_status.results | map(attribute='item') | select('defined') | list | join(';') if drupal_installed|bool else '' }}"
+          php_memory_usage_mb: "{{ (php_memory.stdout|int / 1024)|round|int if php_memory.stdout|default('0')|int > 0 else 0 }}"
+          php_processes: "{{ php_process_count.stdout|int if php_process_count.stdout|default('0')|int > 0 else 0 }}"
+          drupal_detected: "{{ (drupal_dirs.results | selectattr('stat.exists', 'defined') | selectattr('stat.exists', 'equalto', true) | list | length > 0) if drupal_installed|bool else false }}"
+          port_status: "{{ dict(web_port_status.results | map(attribute='item') | select('defined') | list | 
+                         zip(web_port_status.results | map(attribute='state') | select('defined') | list)) 
+                         if drupal_installed|bool else {} }}"
+      when: drupal_installed is defined
+
+    - name: Update host facts with Drupal information
+      set_fact:
+        host_facts: "{{ host_facts | combine({'drupal': drupal_facts}) }}"
+      when: drupal_facts is defined
+
+    - name: Update overall status based on Drupal status
+      set_fact:
+        host_facts: "{{ host_facts | combine({'overall_status': 'critical'}) }}"
+      when: 
+        - drupal_facts is defined
+        - drupal_facts.installed|bool
+        - not drupal_facts.web_server_status|bool or not drupal_facts.db_server_status|bool
+
+    - name: Write updated host facts to file
+      block:
+        - name: Ensure monitoring directory exists
+          file:
+            path: /tmp/ansible_monitoring
+            state: directory
+            mode: 0755
+          delegate_to: localhost
+
+        - name: Debug host facts before writing
+          debug:
+            msg: "Writing Drupal facts for {{ inventory_hostname }}: {{ host_facts | to_json }}"
+            verbosity: 1
+
+        - name: Write host facts to file
+          copy:
+            content: "{{ host_facts | to_json }}"
+            dest: "/tmp/ansible_monitoring/{{ inventory_hostname }}.json"
+          delegate_to: localhost

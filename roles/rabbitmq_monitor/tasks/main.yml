@@ -1,0 +1,102 @@
+---
+- name: Detect RabbitMQ installation
+  block:
+    - name: Set RabbitMQ installation fact based on inventory group
+      set_fact:
+        rabbitmq_installed: true
+      when: host_facts.server_type.is_rabbitmq | bool
+
+    - name: Check for RabbitMQ processes
+      shell: pgrep -f "rabbitmq" | wc -l
+      register: rabbitmq_process_check
+      changed_when: false
+      failed_when: false
+      when: rabbitmq_installed|bool
+
+    - name: Check RabbitMQ service status (systemd)
+      systemd:
+        name: rabbitmq-server
+      register: rabbitmq_service_status
+      failed_when: false
+      changed_when: false
+      when: rabbitmq_installed|bool
+
+    - name: Get RabbitMQ version
+      shell: rabbitmqctl version
+      register: rabbitmq_version_result
+      failed_when: false
+      changed_when: false
+      when: rabbitmq_installed|bool
+
+    - name: Check RabbitMQ port status
+      wait_for:
+        host: "{{ ansible_default_ipv4.address }}"
+        port: "{{ item }}"
+        timeout: 5
+        state: started
+      register: rabbitmq_port_status
+      with_items: "{{ rabbitmq_ports | default([5672, 15672, 25672]) }}"
+      failed_when: false
+      when: rabbitmq_installed|bool
+
+    - name: Get RabbitMQ node status
+      shell: rabbitmqctl status | grep -A1 "RabbitMQ version" | tail -1
+      register: rabbitmq_node_status
+      failed_when: false
+      changed_when: false
+      when: rabbitmq_installed|bool
+
+    - name: Get RabbitMQ cluster status
+      shell: rabbitmqctl cluster_status | grep -A5 "Disk Nodes" | tr '\n' ' '
+      register: rabbitmq_cluster_status
+      failed_when: false
+      changed_when: false
+      when: rabbitmq_installed|bool
+
+    - name: Get RabbitMQ queues count
+      shell: rabbitmqctl list_queues | wc -l
+      register: rabbitmq_queues_count
+      failed_when: false
+      changed_when: false
+      when: rabbitmq_installed|bool
+
+    - name: Get RabbitMQ connections count
+      shell: rabbitmqctl list_connections | wc -l
+      register: rabbitmq_connections_count
+      failed_when: false
+      changed_when: false
+      when: rabbitmq_installed|bool
+
+    - name: Create RabbitMQ facts dictionary
+      set_fact:
+        rabbitmq_facts:
+          installed: "{{ rabbitmq_installed|bool }}"
+          version: "{{ rabbitmq_version_result.stdout | default('unknown') if rabbitmq_installed|bool else 'not_installed' }}"
+          status: "{{ (rabbitmq_service_status.status.Status is defined and rabbitmq_service_status.status.Status == 'running') or (rabbitmq_process_check.stdout|default('0')|int > 0) if rabbitmq_installed|bool else false }}"
+          ports: "{{ rabbitmq_port_status.results | map(attribute='item') | select('defined') | list | join(';') if rabbitmq_installed|bool else '' }}"
+          node_status: "{{ rabbitmq_node_status.stdout | default('unknown') if rabbitmq_installed|bool else 'not_installed' }}"
+          cluster_status: "{{ rabbitmq_cluster_status.stdout | default('standalone') if rabbitmq_installed|bool else 'not_installed' }}"
+          queues_count: "{{ (rabbitmq_queues_count.stdout|int - 1) if rabbitmq_queues_count.stdout|default('0')|int > 0 else 0 }}"
+          connections_count: "{{ (rabbitmq_connections_count.stdout|int - 1) if rabbitmq_connections_count.stdout|default('0')|int > 0 else 0 }}"
+          port_status: "{{ dict(rabbitmq_port_status.results | map(attribute='item') | select('defined') | list | 
+                         zip(rabbitmq_port_status.results | map(attribute='state') | select('defined') | list)) 
+                         if rabbitmq_installed|bool else {} }}"
+
+    - name: Update host facts with RabbitMQ information
+      set_fact:
+        host_facts: "{{ host_facts | combine({'rabbitmq': rabbitmq_facts}) }}"
+      when: rabbitmq_facts is defined
+
+    - name: Update overall status based on RabbitMQ status
+      set_fact:
+        host_facts: "{{ host_facts | combine({'overall_status': 'critical'}) }}"
+      when: 
+        - rabbitmq_facts is defined
+        - rabbitmq_facts.installed|bool
+        - not rabbitmq_facts.status|bool
+
+    - name: Write updated host facts to file
+      copy:
+        content: "{{ host_facts | to_json }}"
+        dest: "/tmp/ansible_monitoring/{{ inventory_hostname }}.json"
+      delegate_to: localhost

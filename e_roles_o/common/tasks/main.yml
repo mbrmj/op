@@ -1,0 +1,31 @@
+---
+- name: Gather OS information
+  set_fact:
+    os_name: "{{ ansible_distribution }}"
+    os_version: "{{ ansible_distribution_version }}"
+    os_family: "{{ ansible_os_family }}"
+
+- name: Check SELinux status
+  command: getenforce
+  register: selinux_status
+  changed_when: false
+  failed_when: false
+
+- name: Store SELinux information
+  set_fact:
+    selinux_mode: "{{ selinux_status.stdout if selinux_status.rc == 0 else 'Not Available' }}"
+
+- name: Ensure local facts directory exists
+  file:
+    path: "{{ local_report_path }}/facts/{{ inventory_hostname }}"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+  become: no
+
+- name: Save common data to local fact file
+  copy:
+    content: "{{ {'os_name': os_name, 'os_version': os_version, 'os_family': os_family, 'selinux_mode': selinux_mode} | to_nice_json }}"
+    dest: "{{ local_report_path }}/facts/{{ inventory_hostname }}/common.json"
+  delegate_to: localhost
+  become: no

@@ -1,0 +1,50 @@
+---
+- name: Check if firewalld is installed and running
+  shell: systemctl status firewalld
+  register: firewalld_status
+  changed_when: false
+  failed_when: false
+
+- name: Check if iptables is installed
+  shell: command -v iptables
+  register: iptables_check
+  changed_when: false
+  failed_when: false
+
+- name: Get open ports with firewalld
+  shell: firewall-cmd --list-ports
+  register: firewalld_ports
+  changed_when: false
+  failed_when: false
+  when: firewalld_status.rc == 0
+
+- name: Get open ports with iptables
+  shell: "iptables -L -n | grep ACCEPT | grep dpt: | awk '{print $7}' | awk -F: '{print $2}'"
+  register: iptables_ports
+  changed_when: false
+  failed_when: false
+  when: iptables_check.rc == 0 and firewalld_status.rc != 0
+
+- name: Get listening ports
+  shell: |
+    netstat -tulpn | grep LISTEN | awk '{print $4}' | awk -F: '{print $NF}' | sort -u || \
+    ss -tulpn | grep LISTEN | awk '{print $5}' | awk -F: '{print $NF}' | sort -u
+  register: listening_ports
+  changed_when: false
+  failed_when: false
+
+- name: Store firewall information
+  set_fact:
+    firewall_info:
+      firewalld_active: "{{ 'active' in firewalld_status.stdout if firewalld_status.rc == 0 else false }}"
+      iptables_installed: "{{ iptables_check.rc == 0 }}"
+      open_ports: "{{ (firewalld_ports.stdout_lines | default([])) if firewalld_status.rc == 0 else (iptables_ports.stdout_lines | default([])) }}"
+      listening_ports: "{{ listening_ports.stdout_lines | default([]) }}"
+      unused_open_ports: "{{ ((firewalld_ports.stdout_lines | default([])) if firewalld_status.rc == 0 else (iptables_ports.stdout_lines | default([]))) | difference(listening_ports.stdout_lines | default([])) }}"
+
+- name: Save firewall data to local fact file
+  copy:
+    content: "{{ firewall_info | to_nice_json }}"
+    dest: "{{ local_report_path }}/facts/{{ inventory_hostname }}/firewall.json"
+  delegate_to: localhost
+  become: no

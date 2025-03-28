@@ -1,0 +1,96 @@
+---
+- name: Ensure monitoring_output_dir is defined
+  set_fact:
+    monitoring_output_dir: "{{ monitoring_output_dir | default(playbook_dir + '/monitoring_reports') }}"
+  delegate_to: localhost
+  run_once: true
+
+- name: Make sure monitoring directory exists
+  file:
+    path: "monitoring-reports"
+    state: directory
+    mode: 0755
+  delegate_to: localhost
+  run_once: true
+
+- name: Ensure report language is defined
+  set_fact:
+    report_language: "{{ report_language | default('en') }}"
+  delegate_to: localhost
+  run_once: true
+
+- name: Get current date and time
+  command: date +%Y-%m-%d
+  register: current_date
+  changed_when: false
+  delegate_to: localhost
+  run_once: true
+
+- name: Set report date fact
+  set_fact:
+    report_date: "{{ current_date.stdout }}"
+  delegate_to: localhost
+  run_once: true
+
+- name: Collect all json files into a list
+  find:
+    paths: /tmp/ansible_monitoring
+    patterns: "*.json"
+  register: json_files
+  delegate_to: localhost
+  run_once: true
+
+- name: Debug collected JSON files
+  debug:
+    msg: "Found {{ json_files.files | length }} monitoring data files"
+  delegate_to: localhost
+  run_once: true
+
+- name: Read monitoring data for each host
+  set_fact:
+    monitoring_data: "{{ monitoring_data | default({}) | combine({item.path | basename | regex_replace('.json$', ''): lookup('file', item.path) | from_json}) }}"
+  with_items: "{{ json_files.files }}"
+  delegate_to: localhost
+  run_once: true
+
+- name: Debug monitoring data for service detection
+  debug:
+    msg: 
+      - "Tomcat servers found: {{ monitoring_data.values() | selectattr('server_type', 'defined') | selectattr('server_type.is_tomcat', 'equalto', true) | list | length }}"
+      - "HAProxy servers found: {{ monitoring_data.values() | selectattr('server_type', 'defined') | selectattr('server_type.is_haproxy', 'equalto', true) | list | length }}"
+      - "RabbitMQ servers found: {{ monitoring_data.values() | selectattr('server_type', 'defined') | selectattr('server_type.is_rabbitmq', 'equalto', true) | list | length }}"
+      - "Drupal CMS servers found: {{ monitoring_data.values() | selectattr('server_type', 'defined') | selectattr('server_type.is_drupal', 'equalto', true) | list | length }}"
+      - "NFS servers found: {{ monitoring_data.values() | selectattr('server_type', 'defined') | selectattr('server_type.is_nfs', 'equalto', true) | list | length }}"
+  delegate_to: localhost
+  run_once: true
+
+- name: Calculate report summary statistics
+  set_fact:
+    report_summary:
+      total_servers: "{{ monitoring_data | length }}"
+      healthy_servers: "{{ monitoring_data.values() | selectattr('overall_status', 'equalto', 'ok') | list | length }}"
+      warning_servers: "{{ monitoring_data.values() | selectattr('overall_status', 'equalto', 'warning') | list | length }}"
+      critical_servers: "{{ monitoring_data.values() | selectattr('overall_status', 'equalto', 'critical') | list | length }}"
+      tomcat_servers: "{{ monitoring_data.values() | selectattr('server_type', 'defined') | selectattr('server_type.is_tomcat', 'equalto', true) | list | length }}"
+      haproxy_servers: "{{ monitoring_data.values() | selectattr('server_type', 'defined') | selectattr('server_type.is_haproxy', 'equalto', true) | list | length }}"
+      rabbitmq_servers: "{{ monitoring_data.values() | selectattr('server_type', 'defined') | selectattr('server_type.is_rabbitmq', 'equalto', true) | list | length }}"
+      high_cpu_servers: "{{ monitoring_data.values() | selectattr('system', 'defined') | selectattr('system.cpu_status', 'ne', 'ok') | list | length }}"
+      high_memory_servers: "{{ monitoring_data.values() | selectattr('system', 'defined') | selectattr('system.memory_status', 'ne', 'ok') | list | length }}"
+      disk_warning_servers: "{{ monitoring_data.values() | selectattr('disk', 'defined') | selectattr('disk.overall_status', 'ne', 'ok') | list | length }}"
+      auto_detected_services: "{{ monitoring_data.values() | selectattr('tomcat', 'defined') | selectattr('tomcat.auto_detected', 'defined') | selectattr('tomcat.auto_detected', 'equalto', true) | list | length + 
+                                 monitoring_data.values() | selectattr('haproxy', 'defined') | selectattr('haproxy.ports_auto_detected', 'defined') | selectattr('haproxy.ports_auto_detected', 'equalto', true) | list | length }}"
+  delegate_to: localhost
+  run_once: true
+
+- name: Generate HTML report
+  template:
+    src: report_template.html.j2
+    dest: "monitoring-reports/infrastructure_report.html"
+  delegate_to: localhost
+  run_once: true
+
+- name: Display report location
+  debug:
+    msg: "Report generated at monitoring-reports/infrastructure_report.html"
+  delegate_to: localhost
+  run_once: true

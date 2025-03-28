@@ -1,0 +1,67 @@
+---
+- name: Ensure local directories exist
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  tasks:
+    - name: Create local report directory
+      file:
+        path: "./reports/facts"
+        state: directory
+        mode: '0755'
+
+- name: Gather Infrastructure Information
+  hosts: all:!localhost
+  become: yes
+  gather_facts: yes
+  roles:
+    - common
+
+- name: Monitor Tomcat Services
+  hosts: tomcat_servers:mixed_servers
+  become: yes
+  roles:
+    - tomcat_monitor
+
+- name: Monitor HAProxy Services
+  hosts: haproxy_servers:mixed_servers
+  become: yes
+  roles:
+    - haproxy_monitor
+
+- name: Monitor Firewall Configuration
+  hosts: all:!localhost
+  become: yes
+  roles:
+    - firewall_monitor
+
+  
+- name: Monitor Disk Status
+  hosts: all:!localhost
+  become: yes
+  roles:
+    - disk_monitor
+
+- name: Monitor System Resources (CPU, Memory, Disk)
+  hosts: all:!localhost
+  become: yes
+  roles:
+    - system_resources_monitor
+
+- name: Monitor RabbitMQ Services
+  hosts: rabbitmq_servers:mixed_servers
+  become: yes
+  roles:
+    - rabbitmq_monitor
+
+
+- name: Generate Infrastructure Report
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  tags: 
+      - report
+      - report_only
+  roles:
+    - report_generator
+

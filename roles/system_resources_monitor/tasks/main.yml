@@ -1,0 +1,99 @@
+---
+- name: Gather system resource information
+  block:
+    - name: Get CPU usage
+      shell: top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}'
+      register: cpu_usage
+      changed_when: false
+      failed_when: false
+
+    - name: Get memory usage
+      shell: free | grep Mem | awk '{print $3/$2 * 100.0}'
+      register: memory_usage
+      changed_when: false
+      failed_when: false
+
+    - name: Get swap usage
+      shell: free | grep Swap | awk '{ if ($2 > 0) print $3/$2 * 100.0; else print "0"; }'
+      register: swap_usage
+      changed_when: false
+      failed_when: false
+
+    - name: Get system load averages
+      shell: uptime | awk -F'[a-z]:' '{print $2}'
+      register: load_averages
+      changed_when: false
+      failed_when: false
+
+    - name: Get CPU info
+      shell: grep -c "processor" /proc/cpuinfo
+      register: cpu_count
+      changed_when: false
+      failed_when: false
+
+    - name: Get top processes by CPU
+      shell: ps -eo pid,ppid,cmd,%mem,%cpu --sort=-%cpu | head -6
+      register: top_cpu_processes
+      changed_when: false
+      failed_when: false
+
+    - name: Get top processes by memory
+      shell: ps -eo pid,ppid,cmd,%mem,%cpu --sort=-%mem | head -6
+      register: top_memory_processes
+      changed_when: false
+      failed_when: false
+
+    - name: Get running processes count
+      shell: ps -ef | wc -l
+      register: process_count
+      changed_when: false
+      failed_when: false
+
+    - name: Get zombie processes count
+      shell: ps aux | grep -w Z | grep -v grep | wc -l
+      register: zombie_count
+      changed_when: false
+      failed_when: false
+
+    - name: Determine CPU status
+      set_fact:
+        cpu_status: "{{ 'critical' if cpu_usage.stdout|float >= cpu_critical_threshold else ('warning' if cpu_usage.stdout|float >= cpu_warning_threshold else 'ok') }}"
+
+    - name: Determine memory status
+      set_fact:
+        memory_status: "{{ 'critical' if memory_usage.stdout|float >= memory_critical_threshold else ('warning' if memory_usage.stdout|float >= memory_warning_threshold else 'ok') }}"
+
+    - name: Create system resources facts dictionary
+      set_fact:
+        system_facts:
+          cpu_usage: "{{ cpu_usage.stdout|float|round(1) }}"
+          cpu_status: "{{ cpu_status }}"
+          memory_usage: "{{ memory_usage.stdout|float|round(1) }}"
+          memory_status: "{{ memory_status }}"
+          swap_usage: "{{ swap_usage.stdout|float|round(1) }}"
+          load_averages: "{{ load_averages.stdout|trim }}"
+          cpu_count: "{{ cpu_count.stdout|int }}"
+          top_cpu_processes: "{{ top_cpu_processes.stdout_lines|default([]) }}"
+          top_memory_processes: "{{ top_memory_processes.stdout_lines|default([]) }}"
+          process_count: "{{ process_count.stdout|int }}"
+          zombie_count: "{{ zombie_count.stdout|int }}"
+          overall_status: "{{ 'critical' if (cpu_status == 'critical' or memory_status == 'critical') else ('warning' if (cpu_status == 'warning' or memory_status == 'warning') else 'ok') }}"
+
+    - name: Update host facts with system resource information
+      set_fact:
+        host_facts: "{{ host_facts | combine({'system': system_facts}) }}"
+      when: system_facts is defined
+
+    - name: Update overall status based on system resource status
+      set_fact:
+        host_facts: "{{ host_facts | combine({'overall_status': system_facts.overall_status}) }}"
+      when: 
+        - system_facts is defined
+        - system_facts.overall_status != 'ok'
+        - host_facts.overall_status == 'ok'
+
+    - name: Write updated host facts to file
+      copy:
+        content: "{{ host_facts | to_json }}"
+        dest: "/tmp/ansible_monitoring/{{ inventory_hostname }}.json"
+      delegate_to: localhost

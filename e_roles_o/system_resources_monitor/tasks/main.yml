@@ -1,0 +1,104 @@
+---
+# Get CPU usage information
+- name: Get CPU usage information
+  shell: |
+    top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}'
+  register: cpu_usage
+  changed_when: false
+  failed_when: false
+
+# Get memory usage information
+- name: Get memory usage information
+  shell: free -m
+  register: memory_info
+  changed_when: false
+  failed_when: false
+
+# Get detailed memory usage as percentages
+- name: Get memory usage percentages
+  shell: free | grep Mem | awk '{print $3/$2 * 100.0}'
+  register: memory_percent
+  changed_when: false
+  failed_when: false
+
+# Get disk usage information
+- name: Get disk usage information
+  shell: df -h
+  register: disk_usage
+  changed_when: false
+  failed_when: false
+
+# Get disk usage percentages
+- name: Get disk usage percentages per filesystem
+  shell: df | grep -v Filesystem | awk '{print $5","$6}'
+  register: disk_percent
+  changed_when: false
+  failed_when: false
+
+# Process disk usage data
+- name: Process disk usage percentages
+  set_fact:
+    disk_usage_data: "{{ disk_usage_data | default([]) + [{'mount_point': item.split(',')[1], 'usage': item.split(',')[0], 'usage_int': item.split(',')[0] | replace('%', '') | int }] }}"
+  loop: "{{ disk_percent.stdout_lines }}"
+  when: item | length > 0
+
+# Calculate average disk usage
+- name: Calculate average disk usage
+  set_fact:
+    avg_disk_usage: >-
+      {{ (disk_usage_data | map(attribute='usage_int') | list | sum) / (disk_usage_data | length) if (disk_usage_data | length > 0) else 0 }}
+
+# Get uptime information
+- name: Get system uptime
+  shell: uptime
+  register: uptime_info
+  changed_when: false
+  failed_when: false
+
+# Get load average
+- name: Get load average
+  shell: uptime | awk -F'load average:' '{ print $2 }' | xargs
+  register: load_avg
+  changed_when: false
+  failed_when: false
+
+# Get processor count for context
+- name: Get processor count
+  shell: nproc
+  register: cpu_count
+  changed_when: false
+  failed_when: false
+
+# Collect all resource information
+- name: Collect resource information
+  set_fact:
+    resource_info:
+      cpu_usage_percent: "{{ cpu_usage.stdout | float | round(1) }}"
+      cpu_count: "{{ cpu_count.stdout | int }}"
+      memory_info: "{{ memory_info.stdout_lines | default([]) }}"
+      memory_used_percent: "{{ memory_percent.stdout | float | round(1) }}"
+      disk_usage_raw: "{{ disk_usage.stdout_lines | default([]) }}"
+      disk_usage_data: "{{ disk_usage_data | default([]) }}"
+      avg_disk_usage: "{{ avg_disk_usage | default(0) | float | round(1) }}"
+      uptime: "{{ uptime_info.stdout }}"
+      load_average: "{{ load_avg.stdout }}"
+      cpu_status: >-
+        {% if cpu_usage.stdout | float < 70 %}good
+        {% elif cpu_usage.stdout | float < 90 %}warning
+        {% else %}critical{% endif %}
+      memory_status: >-
+        {% if memory_percent.stdout | float < 70 %}good
+        {% elif memory_percent.stdout | float < 90 %}warning
+        {% else %}critical{% endif %}
+      disk_status: >-
+        {% if avg_disk_usage | default(0) | float < 70 %}good
+        {% elif avg_disk_usage | default(0) | float < 90 %}warning
+        {% else %}critical{% endif %}
+
+# Save resource data to fact file
+- name: Save resource data to local fact file
+  copy:
+    content: "{{ resource_info | to_nice_json }}"
+    dest: "{{ local_report_path }}/facts/{{ inventory_hostname }}/resources.json"
+  delegate_to: localhost
+  become: no

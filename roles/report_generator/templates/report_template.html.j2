@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="{{ report_language | default('en') }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ translations[report_language | default('en')].title | default('Infrastructure Monitoring Report') }}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            background-color: #2c3e50;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .report-date {
+            font-size: 0.9em;
+        }
+        .summary-box {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        .summary-item {
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            padding: 15px;
+            flex: 1;
+            min-width: 150px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .summary-item h3 {
+            margin-top: 0;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 10px;
+        }
+        .server-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(550px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .server-card {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 0;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .server-header {
+            padding: 10px 15px;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .server-content {
+            padding: 15px;
+        }
+        .status-ok {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .status-warning {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .status-critical {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .status-info {
+            background-color: #e2f0fd;
+            color: #0c5eac;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            font-size: 0.9em;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        .indicator-ok {
+            background-color: #28a745;
+        }
+        .indicator-warning {
+            background-color: #ffc107;
+        }
+        .indicator-critical {
+            background-color: #dc3545;
+        }
+        .resource-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 15px;
+        }
+        .resource-table th, .resource-table td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        .resource-table th {
+            background-color: #f8f9fa;
+        }
+        .compact {
+            font-size: 0.9em;
+        }
+        .service-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 12px;
+            background-color: #e9ecef;
+            font-size: 0.8em;
+            margin-right: 5px;
+            margin-bottom: 5px;
+        }
+        .service-running {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .service-stopped {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .port-list {
+            color: #495057;
+            font-family: monospace;
+        }
+        .disk-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .disk-table td {
+            padding: 4px 8px;
+        }
+        .progress-bar {
+            height: 8px;
+            background-color: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            border-radius: 4px;
+        }
+        .fill-ok {
+            background-color: #28a745;
+        }
+        .fill-warning {
+            background-color: #ffc107;
+        }
+        .fill-critical {
+            background-color: #dc3545;
+        }
+        .filter-controls {
+            margin-bottom: 20px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        .filter-button {
+            padding: 5px 10px;
+            margin-right: 5px;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            background-color: white;
+            cursor: pointer;
+        }
+        .filter-button.active {
+            background-color: #007bff;
+            color: white;
+            border-color: #007bff;
+        }
+        .hidden {
+            display: none;
+        }
+        .nfs-shares {
+            margin-top: 5px;
+            padding-left: 20px;
+        }
+        .nfs-shares li {
+            margin-bottom: 2px;
+            font-family: monospace;
+            font-size: 0.85em;
+        }
+        @media print {
+            .filter-controls {
+                display: none;
+            }
+            .server-grid {
+                display: block;
+            }
+            .server-card {
+                page-break-inside: avoid;
+                margin-bottom: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>{{ translations[report_language | default('en')].title | default('Infrastructure Monitoring Report') }}</h1>
+            <div class="report-date">{{ translations[report_language | default('en')].date | default('Date') }}: {{ report_date | default(ansible_date_time.date) | default(lookup('pipe','date +%Y-%m-%d')) }}</div>
+        </div>
+
+        <!-- Debug Information -->
+        <div class="status-info">
+            <strong>Monitoring Information:</strong>
+            <ul>
+                <li>Total servers found: {{ monitoring_data | length }}</li>
+                <li>Report generation time: {{ lookup('pipe','date +%H:%M:%S') }}</li>
+                <li>Server types detected:
+                    {% set server_types = [] %}
+                    {% for server in monitoring_data.values() %}
+                        {% if server.server_type is defined %}
+                            {% for type_key, type_value in server.server_type.items() %}
+                                {% if type_value and type_key not in server_types %}
+                                    {% set server_types = server_types + [type_key] %}
+                                {% endif %}
+                            {% endfor %}
+                        {% endif %}
+                    {% endfor %}
+                    {{ server_types | join(', ') }}
+                </li>
+            </ul>
+        </div>
+
+
+       <!-- Summary Section -->
+        <h2>{{ translations[report_language | default('en')].report_overview | default('Report Overview') }}</h2>
+        <div class="summary-box">
+            <div class="summary-item">
+                <h3>{{ translations[report_language | default('en')].total_servers | default('Total Servers') }}</h3>
+                <div class="big-number">{{ report_summary.total_servers | default(monitoring_data | length) }}</div>
+            </div>
+            <div class="summary-item status-ok">
+                <h3>{{ translations[report_language | default('en')].healthy_servers | default('Healthy Servers') }}</h3>
+                <div class="big-number">{{ report_summary.healthy_servers | default(monitoring_data.values() | selectattr('overall_status', 'defined') | selectattr('overall_status', 'equalto', 'ok') | list | length) }}</div>
+            </div>
+            <div class="summary-item status-warning">
+                <h3>{{ translations[report_language | default('en')].warning_servers | default('Warning Servers') }}</h3>
+                <div class="big-number">{{ report_summary.warning_servers | default(monitoring_data.values() | selectattr('overall_status', 'defined') | selectattr('overall_status', 'equalto', 'warning') | list | length) }}</div>
+            </div>
+            <div class="summary-item status-critical">
+                <h3>{{ translations[report_language | default('en')].critical_servers | default('Critical Servers') }}</h3>
+                <div class="big-number">{{ report_summary.critical_servers | default(monitoring_data.values() | selectattr('overall_status', 'defined') | selectattr('overall_status', 'equalto', 'critical') | list | length) }}</div>
+            </div>
+        </div>
+
+        <div class="summary-box">
+            {% set server_types = [
+                {'key': 'is_tomcat', 'name': 'Tomcat', 'summary_key': 'tomcat_servers'},
+                {'key': 'is_haproxy', 'name': 'HAProxy', 'summary_key': 'haproxy_servers'},
+                {'key': 'is_rabbitmq', 'name': 'RabbitMQ', 'summary_key': 'rabbitmq_servers'},
+                {'key': 'is_drupal', 'name': 'Drupal CMS', 'summary_key': 'drupal_servers'},
+                {'key': 'is_nfs', 'name': 'NFS', 'summary_key': 'nfs_servers'}
+            ] %}
+            
+            {% for type in server_types %}
+            <div class="summary-item">
+                <h3>{{ type.name }}</h3>
+                <div>{{ report_summary[type.summary_key] | default(monitoring_data.values() | selectattr('server_type', 'defined') | selectattr('server_type.' + type.key, 'defined') | selectattr('server_type.' + type.key, 'equalto', true) | list | length) }} servers</div>
+            </div>
+            {% endfor %}
+            
+            <div class="summary-item">
+                <h3>Resource Issues</h3>
+                <div>CPU: {{ report_summary.high_cpu_servers | default(monitoring_data.values() | selectattr('system', 'defined') | selectattr('system.cpu_status', 'defined') | selectattr('system.cpu_status', 'ne', 'ok') | list | length) }}</div>
+                <div>Memory: {{ report_summary.high_memory_servers | default(monitoring_data.values() | selectattr('system', 'defined') | selectattr('system.memory_status', 'defined') | selectattr('system.memory_status', 'ne', 'ok') | list | length) }}</div>
+                <div>Disk: {{ report_summary.disk_warning_servers | default(monitoring_data.values() | selectattr('disk', 'defined') | selectattr('disk.overall_status', 'defined') | selectattr('disk.overall_status', 'ne', 'ok') | list | length) }}</div>
+                <div>Auto-detected: {{ report_summary.auto_detected_services | default(0) }}</div>
+            </div>
+        </div>
+
+       <!-- Filter Controls -->
+        <div class="filter-controls">
+            <strong>Filtrer:</strong>
+            <button class="filter-button active" data-filter="all">Tous</button>
+            <button class="filter-button" data-filter="critical">Critique</button>
+            <button class="filter-button" data-filter="warning">Avertissement</button>
+            <button class="filter-button" data-filter="ok">OK</button>
+            
+            {% set type_counts = {
+                'tomcat': monitoring_data.values() | selectattr('server_type', 'defined') | selectattr('server_type.is_tomcat', 'defined') | selectattr('server_type.is_tomcat', 'equalto', true) | list | length,
+                'haproxy': monitoring_data.values() | selectattr('server_type', 'defined') | selectattr('server_type.is_haproxy', 'defined') | selectattr('server_type.is_haproxy', 'equalto', true) | list | length,
+                'rabbitmq': monitoring_data.values() | selectattr('server_type', 'defined') | selectattr('server_type.is_rabbitmq', 'defined') | selectattr('server_type.is_rabbitmq', 'equalto', true) | list | length,
+                'drupal': monitoring_data.values() | selectattr('server_type', 'defined') | selectattr('server_type.is_drupal', 'defined') | selectattr('server_type.is_drupal', 'equalto', true) | list | length,
+                'nfs': monitoring_data.values() | selectattr('server_type', 'defined') | selectattr('server_type.is_nfs', 'defined') | selectattr('server_type.is_nfs', 'equalto', true) | list | length
+            } %}
+            
+            {% set filter_buttons = [
+                {'filter': 'tomcat', 'label': 'Tomcat', 'count': type_counts.tomcat},
+                {'filter': 'haproxy', 'label': 'HAProxy', 'count': type_counts.haproxy},
+                {'filter': 'rabbitmq', 'label': 'RabbitMQ', 'count': type_counts.rabbitmq},
+                {'filter': 'drupal', 'label': 'Drupal CMS', 'count': type_counts.drupal},
+                {'filter': 'nfs', 'label': 'NFS', 'count': type_counts.nfs}
+            ] %}
+            
+            {% for button in filter_buttons %}
+                {% if button.count > 0 %}
+                <button class="filter-button" data-filter="{{ button.filter }}">{{ button.label }} ({{ button.count }})</button>
+                {% endif %}
+            {% endfor %}
+        </div> 
+<!-- Server Cards -->
+        <div class="server-grid">
+        {% for hostname, server in monitoring_data.items() %}
+            <div class="server-card filter-{{ server.overall_status | default('unknown') }} 
+                {% if server.server_type is defined %}
+                    {% if server.server_type.is_tomcat | default(false) %}filter-tomcat{% endif %}
+                    {% if server.server_type.is_haproxy | default(false) %}filter-haproxy{% endif %}
+                    {% if server.server_type.is_rabbitmq | default(false) %}filter-rabbitmq{% endif %}
+                    {% if server.server_type.is_drupal | default(false) %}filter-drupal{% endif %}
+                    {% if server.server_type.is_nfs | default(false) %}filter-nfs{% endif %}
+                {% endif %}">
+                <div class="server-header status-{{ server.overall_status | default('warning') }}">
+                    <h3>
+                        <span class="status-indicator indicator-{{ server.overall_status | default('warning') }}"></span>
+                        {{ server.hostname | default(hostname) }}
+                    </h3>
+                    <div class="server-type">
+                        {% if server.server_type is defined %}
+                            {% if server.server_type.is_tomcat | default(false) %}<span class="service-badge">Tomcat</span>{% endif %}
+                            {% if server.server_type.is_haproxy | default(false) %}<span class="service-badge">HAProxy</span>{% endif %}
+                            {% if server.server_type.is_rabbitmq | default(false) %}<span class="service-badge">RabbitMQ</span>{% endif %}
+                            {% if server.server_type.is_drupal | default(false) %}<span class="service-badge">Drupal CMS</span>{% endif %}
+                            {% if server.server_type.is_nfs | default(false) %}<span class="service-badge">NFS</span>{% endif %}
+                        {% else %}
+                            <span class="service-badge">Unknown</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="server-content">
+                    <!-- Basic Server Information -->
+                    <div class="server-info compact">
+                        <strong>{{ translations[report_language | default('en')].ip_address | default('IP Address') }}:</strong> {{ server.ip_address | default('Unknown') }} | 
+                        <strong>{{ translations[report_language | default('en')].os | default('OS') }}:</strong> {{ server.os | default('Unknown') }} | 
+                        <strong>{{ translations[report_language | default('en')].uptime | default('Uptime') }}:</strong> {{ server.uptime | default('Unknown') }}
+                    </div>
+                    
+                    <!-- System Resources Section - Always show -->
+                    <h4>{{ translations[report_language | default('en')].summary | default('System Summary') }}</h4>
+                    {% if server.system is defined and server.system.cpu_usage is defined %}
+                    <table class="resource-table">
+                        <tr>
+                            <th>{{ translations[report_language | default('en')].cpu_usage | default('CPU Usage') }}</th>
+                            <td>
+                                {{ server.system.cpu_usage }}% 
+                                <div class="progress-bar">
+                                    <div class="progress-fill fill-{{ server.system.cpu_status | default('warning') }}" style="width: {{ server.system.cpu_usage }}%;"></div>
+                                </div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>{{ translations[report_language | default('en')].memory_usage | default('Memory Usage') }}</th>
+                            <td>
+                                {{ server.system.memory_usage }}% 
+                                <div class="progress-bar">
+                                    <div class="progress-fill fill-{{ server.system.memory_status | default('warning') }}" style="width: {{ server.system.memory_usage }}%;"></div>
+                                </div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>{{ translations[report_language | default('en')].swap_usage | default('Swap Usage') }}</th>
+                            <td>
+                                {{ server.system.swap_usage }}% 
+                                <div class="progress-bar">
+                                    <div class="progress-fill fill-{{ 'critical' if server.system.swap_usage > 80 else ('warning' if server.system.swap_usage > 50 else 'ok') }}" style="width: {{ server.system.swap_usage }}%;"></div>
+                                </div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>Load Avg</th>
+                            <td>{{ server.system.load_averages | default('0.0 0.0 0.0') }}</td>
+                        </tr>
+                    </table>
+                    {% else %}
+                    <div class="status-warning">System resource data not available</div>
+                    {% endif %}
+                    
+                    <!-- Disk Usage Section - Show if data exists -->
+                    {% if server.disk is defined and server.disk.partitions is defined and server.disk.partitions|length > 0 %}
+                    <h4>{{ translations[report_language | default('en')].disk_usage | default('Disk Usage') }}</h4>
+                    <table class="disk-table compact">
+                        {% for partition in server.disk.partitions %}
+                        <tr>
+                            <td width="20%">{{ partition.mountpoint }}</td>
+                            <td width="15%">{{ partition.size }}</td>
+                            <td width="50%">
+                                <div class="progress-bar">
+                                    <div class="progress-fill fill-{{ 'critical' if partition.percent|int >= disk_critical_threshold|default(90) else ('warning' if partition.percent|int >= disk_warning_threshold|default(75) else 'ok') }}" style="width: {{ partition.percent }}%;"></div>
+                                </div>
+                            </td>
+                            <td width="15%">{{ partition.percent }}%</td>
+                        </tr>
+                        {% endfor %}
+                    </table>
+                    {% endif %}
+                    
+                    <!-- Service Sections - Only show for specific server types -->
+                    {% if server.server_type.is_tomcat|default(false) %}
+                    <h4>Tomcat</h4>
+                    {% if server.tomcat is defined and server.tomcat.installed|default(false) %}
+                    <div class="service-status">
+                        <span class="service-badge {{ 'service-running' if server.tomcat.status|default(false) else 'service-stopped' }}">
+                            {{ translations[report_language | default('en')].running | default('Running') if server.tomcat.status|default(false) else translations[report_language | default('en')].stopped | default('Stopped') }}
+                        </span>
+                        <strong>{{ translations[report_language | default('en')].version | default('Version') }}:</strong> {{ server.tomcat.version|default('unknown') }}
+                        <strong>Service:</strong> {{ server.tomcat.service_name|default('unknown') }}
+                    </div>
+                    <div>
+                        <strong>{{ translations[report_language | default('en')].port_status | default('Port Status') }}:</strong>
+                        <span class="port-list">{{ server.tomcat.ports|default('none') }}</span>
+                        {% if server.tomcat.auto_detected|default(false) %}
+                        <small>(auto-detected)</small>
+                        {% endif %}
+                    </div>
+                    {% if server.tomcat.memory_usage_mb|default(0) > 0 %}
+                    <div>
+                        <strong>{{ translations[report_language | default('en')].memory_usage | default('Memory Usage') }}:</strong> {{ server.tomcat.memory_usage_mb }} MB 
+                        | <strong>Threads:</strong> {{ server.tomcat.threads|default(0) }}
+                    </div>
+                    {% endif %}
+                    {% else %}
+                    <div class="status-warning">Tomcat data not available</div>
+                    {% endif %}
+                    {% endif %}
+                    
+                    {% if server.server_type.is_haproxy|default(false) %}
+                    <h4>HAProxy</h4>
+                    {% if server.haproxy is defined and server.haproxy.haproxy_installed|default(false) %}
+                    <div class="service-status">
+                        <span class="service-badge {{ 'service-running' if server.haproxy.haproxy_status|default(false) else 'service-stopped' }}">
+                            HAProxy: {{ translations[report_language | default('en')].running | default('Running') if server.haproxy.haproxy_status|default(false) else translations[report_language | default('en')].stopped | default('Stopped') }}
+                        </span>
+                        {% if server.haproxy.keepalived_installed|default(false) %}
+                        <span class="service-badge {{ 'service-running' if server.haproxy.keepalived_status|default(false) else 'service-stopped' }}">
+                            Keepalived: {{ translations[report_language | default('en')].running | default('Running') if server.haproxy.keepalived_status|default(false) else translations[report_language | default('en')].stopped | default('Stopped') }}
+                        </span>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <strong>{{ translations[report_language | default('en')].version | default('Version') }}:</strong> {{ server.haproxy.haproxy_version|default('unknown') }}
+                        | <strong>Service:</strong> {{ server.haproxy.haproxy_service_name|default('unknown') }}
+                        {% if server.haproxy.keepalived_installed|default(false) %}
+                        | <strong>Keepalived:</strong> {{ server.haproxy.keepalived_version|default('unknown') }}
+                        {% if server.haproxy.keepalived_service_name|default(false) %}
+                        ({{ server.haproxy.keepalived_service_name }})
+                        {% endif %}
+                        {% endif %}
+                    </div>
+                    <div>
+                        <strong>{{ translations[report_language | default('en')].port_status | default('Port Status') }}:</strong>
+                        <span class="port-list">{{ server.haproxy.haproxy_ports|default('none') }}</span>
+                        {% if server.haproxy.ports_auto_detected|default(false) %}
+                        <small>(auto-detected)</small>
+                        {% endif %}
+                    </div>
+                    {% if server.haproxy.keepalived_installed|default(false) and server.haproxy.vrrp_interfaces|default(0) > 0 %}
+                    <div>
+                        <strong>VRRP:</strong> {{ server.haproxy.vrrp_interfaces }} interfaces
+                    </div>
+                    {% endif %}
+                    {% else %}
+                    <div class="status-warning">HAProxy data not available</div>
+                    {% endif %}
+                    {% endif %}
+                    
+                    {% if server.server_type.is_rabbitmq|default(false) %}
+                    <h4>RabbitMQ</h4>
+                    {% if server.rabbitmq is defined and server.rabbitmq.installed|default(false) %}
+                    <div class="service-status">
+                        <span class="service-badge {{ 'service-running' if server.rabbitmq.status|default(false) else 'service-stopped' }}">
+                            {{ translations[report_language | default('en')].running | default('Running') if server.rabbitmq.status|default(false) else translations[report_language | default('en')].stopped | default('Stopped') }}
+                        </span>
+                        <strong>{{ translations[report_language | default('en')].version | default('Version') }}:</strong> {{ server.rabbitmq.version|default('unknown') }}
+                    </div>
+                    <div>
+                        <strong>{{ translations[report_language | default('en')].port_status | default('Port Status') }}:</strong>
+                        <span class="port-list">{{ server.rabbitmq.ports|default('none') }}</span>
+                    </div>
+                    {% if server.rabbitmq.queues_count|default(0) > 0 or server.rabbitmq.connections_count|default(0) > 0 %}
+                    <div>
+                        <strong>Queues:</strong> {{ server.rabbitmq.queues_count }}
+                        | <strong>Connections:</strong> {{ server.rabbitmq.connections_count }}
+                    </div>
+                    {% endif %}
+                    {% else %}
+                    <div class="status-warning">RabbitMQ data not available</div>
+                    {% endif %}
+                    {% endif %}
+                    
+                    {% if server.server_type.is_drupal|default(false) %}
+                    <h4>Drupal CMS</h4>
+                    {% if server.drupal is defined and server.drupal.installed|default(false) %}
+                    <div class="service-status">
+                        <span class="service-badge {{ 'service-running' if server.drupal.web_server_status|default(false) else 'service-stopped' }}">
+                            Web: {{ translations[report_language | default('en')].running | default('Running') if server.drupal.web_server_status|default(false) else translations[report_language | default('en')].stopped | default('Stopped') }}
+                        </span>
+                        <span class="service-badge {{ 'service-running' if server.drupal.db_server_status|default(false) else 'service-stopped' }}">
+                            DB: {{ translations[report_language | default('en')].running | default('Running') if server.drupal.db_server_status|default(false) else translations[report_language | default('en')].stopped | default('Stopped') }}
+                        </span>
+                        <strong>{{ translations[report_language | default('en')].version | default('Version') }}:</strong> {{ server.drupal.version|default('unknown') }}
+                    </div>
+                    <div>
+                        <strong>Web Server:</strong> {{ server.drupal.web_server_type|default('unknown') }}
+                        | <strong>DB Server:</strong> {{ server.drupal.db_server_type|default('unknown') }}
+                    </div>
+                    <div>
+                        <strong>{{ translations[report_language | default('en')].port_status | default('Port Status') }}:</strong>
+                        <span class="port-list">{{ server.drupal.ports|default('none') }}</span>
+                    </div>
+                    {% if server.drupal.php_memory_usage_mb|default(0) > 0 %}
+                    <div>
+                        <strong>PHP Memory:</strong> {{ server.drupal.php_memory_usage_mb }} MB 
+                        | <strong>PHP Processes:</strong> {{ server.drupal.php_processes|default(0) }}
+                    </div>
+                    {% endif %}
+                    {% else %}
+                    <div class="status-warning">Drupal data not available</div>
+                    {% endif %}
+                    {% endif %}
+                    
+                    {% if server.server_type.is_nfs|default(false) %}
+                    <h4>NFS Server</h4>
+                    {% if server.nfs is defined and server.nfs.installed|default(false) %}
+                    <div class="service-status">
+                        <span class="service-badge {{ 'service-running' if server.nfs.status|default(false) else 'service-stopped' }}">
+                            {{ translations[report_language | default('en')].running | default('Running') if server.nfs.status|default(false) else translations[report_language | default('en')].stopped | default('Stopped') }}
+                        </span>
+                        <strong>Service:</strong> {{ server.nfs.service_name|default('unknown') }}
+                    </div>
+                    <div>
+                        <strong>{{ translations[report_language | default('en')].port_status | default('Port Status') }}:</strong>
+                        <span class="port-list">{{ server.nfs.ports|default('none') }}</span>
+                    </div>
+                    <div>
+                        <strong>Exports:</strong> {{ server.nfs.exports_count|default(0) }}
+                        | <strong>Client Connections:</strong> {{ server.nfs.client_connections|default(0) }}
+                        | <strong>CPU Usage:</strong> {{ server.nfs.cpu_usage|default(0) }}%
+                    </div>
+                    {% if server.nfs.shares|default([])|length > 0 and server.nfs.shares[0] != 'No shares found' %}
+                    <div class="compact">
+                        <strong>Shares:</strong> 
+                        <ul class="nfs-shares">
+                        {% for share in server.nfs.shares %}
+                            {% if share != 'Unable to list exports' and share != 'Export list for localhost:' %}
+                            <li>{{ share }}</li>
+                            {% endif %}
+                        {% endfor %}
+                        </ul>
+                    </div>
+                    {% endif %}
+                    {% else %}
+                    <div class="status-warning">NFS data not available</div>
+                    {% endif %}
+                    {% endif %}
+                    
+                    <!-- Firewall Section - Common for all servers -->
+                    {% if server.firewall is defined %}
+                    <h4>{{ translations[report_language | default('en')].firewall | default('Firewall') }}</h4>
+                    <div>
+                        <strong>Type:</strong> {{ server.firewall.firewall_type | default('unknown') }}
+                        <span class="service-badge {{ 'service-running' if server.firewall.firewall_active|default(false) else 'service-stopped' }}">
+                            {{ translations[report_language | default('en')].enabled | default('Enabled') if server.firewall.firewall_active|default(false) else translations[report_language | default('en')].disabled | default('Disabled') }}
+                        </span>
+                    </div>
+                    {% if server.firewall.missing_ports is defined and server.firewall.missing_ports|length > 0 %}
+                    <div class="status-warning">
+                        <strong>Missing expected ports:</strong> {{ server.firewall.missing_ports }}
+                    </div>
+                    {% endif %}
+                    {% endif %}
+                    
+                    <!-- SELinux Status - Common for all servers -->
+                    {% if server.selinux is defined %}
+                    <div>
+                        <strong>SELinux:</strong> {{ server.selinux }}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        {% endfor %}
+        </div>
+<script>
+        // Filter functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const filterButtons = document.querySelectorAll('.filter-button');
+            const serverCards = document.querySelectorAll('.server-card');
+            
+            // Update filter counts
+            const updateFilterCounts = function() {
+                const filters = {
+                    'all': 0,
+                    'ok': 0,
+                    'warning': 0,
+                    'critical': 0,
+                    'tomcat': 0,
+                    'haproxy': 0,
+                    'rabbitmq': 0,
+                    'drupal': 0,
+                    'nfs': 0
+                };
+                
+                // Count visible servers for each type
+                serverCards.forEach(card => {
+                    if (!card.classList.contains('hidden')) {
+                        filters.all++;
+                        
+                        // Count by status
+                        if (card.classList.contains('filter-ok')) filters.ok++;
+                        if (card.classList.contains('filter-warning')) filters.warning++;
+                        if (card.classList.contains('filter-critical')) filters.critical++;
+                        
+                        // Count by server type
+                        if (card.classList.contains('filter-tomcat')) filters.tomcat++;
+                        if (card.classList.contains('filter-haproxy')) filters.haproxy++;
+                        if (card.classList.contains('filter-rabbitmq')) filters.rabbitmq++;
+                        if (card.classList.contains('filter-drupal')) filters.drupal++;
+                        if (card.classList.contains('filter-nfs')) filters.nfs++;
+                    }
+                });
+            };
+            
+            filterButtons.forEach(button => {
+                button.addEventListener('click', function() {
+                    const filter = this.getAttribute('data-filter');
+                    
+                    // Update active button
+                    filterButtons.forEach(btn => btn.classList.remove('active'));
+                    this.classList.add('active');
+                    
+                    // Filter server cards
+                    serverCards.forEach(card => {
+                        if (filter === 'all') {
+                            card.classList.remove('hidden');
+                        } else {
+                            if (card.classList.contains('filter-' + filter)) {
+                                card.classList.remove('hidden');
+                            } else {
+                                card.classList.add('hidden');
+                            }
+                        }
+                    });
+                    
+                    // Update counts after filtering
+                    updateFilterCounts();
+                });
+            });
+            
+            // Initial count
+            updateFilterCounts();
+        });
+    </script>
+</body>
+</html>

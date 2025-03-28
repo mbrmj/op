@@ -1,0 +1,183 @@
+---
+- name: Detect HAProxy installation
+  block:
+    - name: Set HAProxy installation fact based on inventory group
+      set_fact:
+        haproxy_installed: true
+        keepalived_installed: true
+      when: host_facts.server_type.is_haproxy | bool
+
+    - name: Auto-detect HAProxy service name
+      shell: systemctl list-units --type=service | grep -i haproxy | awk '{print $1}' | grep -o '[^.]*'
+      register: haproxy_service_name_result
+      changed_when: false
+      failed_when: false
+      when: haproxy_installed|bool
+
+    - name: Set HAProxy service name fact
+      set_fact:
+        haproxy_service_name: "{{ haproxy_service_name_result.stdout_lines[0] | default('haproxy') }}"
+      when: haproxy_installed|bool and haproxy_service_name_result.stdout_lines is defined and haproxy_service_name_result.stdout_lines|length > 0
+
+    - name: Auto-detect Keepalived service name
+      shell: systemctl list-units --type=service | grep -i keepalived | awk '{print $1}' | grep -o '[^.]*'
+      register: keepalived_service_name_result
+      changed_when: false
+      failed_when: false
+      when: keepalived_installed|bool
+
+    - name: Set Keepalived service name fact
+      set_fact:
+        keepalived_service_name: "{{ keepalived_service_name_result.stdout_lines[0] | default('keepalived') }}"
+      when: keepalived_installed|bool and keepalived_service_name_result.stdout_lines is defined and keepalived_service_name_result.stdout_lines|length > 0
+
+    - name: Check for HAProxy processes
+      shell: pgrep -f "haproxy" | wc -l
+      register: haproxy_process_check
+      changed_when: false
+      failed_when: false
+      when: haproxy_installed|bool
+
+    - name: Check for Keepalived processes
+      shell: pgrep -f "keepalived" | wc -l
+      register: keepalived_process_check
+      changed_when: false
+      failed_when: false
+      when: keepalived_installed|bool
+
+    - name: Check HAProxy service status (systemd) with detected service name
+      systemd:
+        name: "{{ haproxy_service_name }}"
+      register: haproxy_service_status_detected
+      failed_when: false
+      changed_when: false
+      when: haproxy_installed|bool and haproxy_service_name is defined
+
+    - name: Check HAProxy service status (systemd) with default name as fallback
+      systemd:
+        name: haproxy
+      register: haproxy_service_status_fallback
+      failed_when: false
+      changed_when: false
+      when: haproxy_installed|bool and (haproxy_service_name is not defined or haproxy_service_status_detected.status.Status is not defined)
+
+    - name: Check Keepalived service status (systemd) with detected service name
+      systemd:
+        name: "{{ keepalived_service_name }}"
+      register: keepalived_service_status_detected
+      failed_when: false
+      changed_when: false
+      when: keepalived_installed|bool and keepalived_service_name is defined
+
+    - name: Check Keepalived service status (systemd) with default name as fallback
+      systemd:
+        name: keepalived
+      register: keepalived_service_status_fallback
+      failed_when: false
+      changed_when: false
+      when: keepalived_installed|bool and (keepalived_service_name is not defined or keepalived_service_status_detected.status.Status is not defined)
+
+    - name: Get HAProxy version
+      shell: haproxy -v | head -n 1 | awk '{print $3}'
+      register: haproxy_version_result
+      failed_when: false
+      changed_when: false
+      when: haproxy_installed|bool
+
+    - name: Get Keepalived version
+      shell: keepalived --version 2>&1 | head -n 1 | awk '{print $2}'
+      register: keepalived_version_result
+      failed_when: false
+      changed_when: false
+      when: keepalived_installed|bool
+
+    - name: Auto-detect HAProxy ports
+      shell: >
+        netstat -tlpn 2>/dev/null | grep -E "haproxy" | awk '{print $4}' | 
+        awk -F ':' '{print $NF}' | sort -u 2>/dev/null || 
+        ss -tlpn | grep -E "haproxy" | awk '{print $4}' | 
+        awk -F ':' '{print $NF}' | sort -u
+      register: haproxy_detected_ports
+      changed_when: false
+      failed_when: false
+      when: haproxy_installed|bool
+
+    - name: Set detected HAProxy ports fact
+      set_fact:
+        detected_haproxy_ports: "{{ haproxy_detected_ports.stdout_lines | default([]) }}"
+      when: haproxy_installed|bool and haproxy_detected_ports.stdout_lines is defined and haproxy_detected_ports.stdout_lines|length > 0
+
+    - name: Set fallback HAProxy ports if none detected
+      set_fact:
+        detected_haproxy_ports: "{{ haproxy_ports | default([80, 443, 5000]) }}"
+      when: haproxy_installed|bool and (detected_haproxy_ports is not defined or detected_haproxy_ports|length == 0)
+
+    - name: Check HAProxy port status
+      wait_for:
+        host: "{{ ansible_default_ipv4.address }}"
+        port: "{{ item }}"
+        timeout: 5
+        state: started
+      register: haproxy_port_status
+      with_items: "{{ detected_haproxy_ports }}"
+      failed_when: false
+      when: haproxy_installed|bool
+
+    - name: Get HAProxy stats if available
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:5000/haproxy?stats;csv"
+        method: GET
+        timeout: -1
+        return_content: yes
+      register: haproxy_stats
+      failed_when: false
+      when: haproxy_installed|bool
+
+    - name: Check for VRRP interfaces (Keepalived)
+      shell: ip addr | grep -o 'inet .* VRRP' | wc -l
+      register: vrrp_interfaces
+      failed_when: false
+      changed_when: false
+      when: keepalived_installed|bool
+
+    - name: Create HAProxy/Keepalived facts dictionary
+      set_fact:
+        haproxy_facts:
+          haproxy_installed: "{{ haproxy_installed|bool }}"
+          haproxy_service_name: "{{ haproxy_service_name | default('haproxy') if haproxy_installed|bool else 'not_installed' }}"
+          haproxy_version: "{{ haproxy_version_result.stdout | default('unknown') if haproxy_installed|bool else 'not_installed' }}"
+          haproxy_status: "{{ (haproxy_service_status_detected.status.Status is defined and haproxy_service_status_detected.status.Status == 'running') or 
+                              (haproxy_service_status_fallback.status.Status is defined and haproxy_service_status_fallback.status.Status == 'running') or 
+                              (haproxy_process_check.stdout|default('0')|int > 0) if haproxy_installed|bool else false }}"
+          haproxy_detected_ports: "{{ detected_haproxy_ports | join(';') if haproxy_installed|bool else '' }}"
+          haproxy_ports: "{{ haproxy_port_status.results | map(attribute='item') | select('defined') | list | join(';') if haproxy_installed|bool else '' }}"
+          keepalived_installed: "{{ keepalived_installed|bool }}"
+          keepalived_service_name: "{{ keepalived_service_name | default('keepalived') if keepalived_installed|bool else 'not_installed' }}"
+          keepalived_version: "{{ keepalived_version_result.stdout | default('unknown') if keepalived_installed|bool else 'not_installed' }}"
+          keepalived_status: "{{ (keepalived_service_status_detected.status.Status is defined and keepalived_service_status_detected.status.Status == 'running') or 
+                                 (keepalived_service_status_fallback.status.Status is defined and keepalived_service_status_fallback.status.Status == 'running') or 
+                                 (keepalived_process_check.stdout|default('0')|int > 0) if keepalived_installed|bool else false }}"
+          vrrp_interfaces: "{{ vrrp_interfaces.stdout|int if keepalived_installed|bool else 0 }}"
+          port_status: "{{ dict(haproxy_port_status.results | map(attribute='item') | select('defined') | list |
+                          zip(haproxy_port_status.results | map(attribute='state') | select('defined') | list))
+                          if haproxy_installed|bool else {} }}"
+          ports_auto_detected: "{{ detected_haproxy_ports != haproxy_ports if detected_haproxy_ports is defined else false }}"
+
+    - name: Update host facts with HAProxy information
+      set_fact:
+        host_facts: "{{ host_facts | combine({'haproxy': haproxy_facts}) }}"
+      when: haproxy_facts is defined
+
+    - name: Update overall status based on HAProxy/Keepalived status
+      set_fact:
+        host_facts: "{{ host_facts | combine({'overall_status': 'critical'}) }}"
+      when: 
+        - haproxy_facts is defined
+        - haproxy_facts.haproxy_installed|bool
+        - not haproxy_facts.haproxy_status|bool
+
+    - name: Write updated host facts to file
+      copy:
+        content: "{{ host_facts | to_json }}"
+        dest: "/tmp/ansible_monitoring/{{ inventory_hostname }}.json"
+      delegate_to: localhost
