@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+import json
+import xlsxwriter
+
+# Charger les données JSON (fichier généré par set_fact)
+with open("{{ results_file }}", "r") as f:
+    data = json.load(f)
+
+# Créer un classeur Excel
+workbook = xlsxwriter.Workbook("{{ excel_output }}")
+worksheet = workbook.add_worksheet("Audit RHEL9")
+
+# Titres de colonnes
+headers = ["ID", "Commande", "Résultat"]
+for col_num, header in enumerate(headers):
+    worksheet.write(0, col_num, header)
+
+# Remplir les données
+for row_num, item in enumerate(data, start=1):
+    worksheet.write(row_num, 0, item["ID"])
+    worksheet.write(row_num, 1, item["Commande"])
+    worksheet.write(row_num, 2, item["Résultat"])
+
+workbook.close()

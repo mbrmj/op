@@ -1,0 +1,187 @@
+- name: Create local results directory
+  local_action:
+    module: file
+    path: "{{ audit_results_dir }}"
+    state: directory
+  run_once: true
+
+# File System Security Checks
+- name: Check if /tmp is separate partition
+  raw: "df /tmp | tail -1 | awk '{print $1}' | grep -v '^/$' && echo 'SEPARATE' || echo 'NOT_SEPARATE'"
+  register: tmp_partition_check
+  changed_when: false
+
+- name: Check /tmp mount options
+  raw: "mount | grep ' /tmp ' | grep -o 'noexec\\|nosuid\\|nodev' | tr '\\n' ',' | sed 's/,$//'"
+  register: tmp_mount_options
+  changed_when: false
+
+- name: Check /var/log is separate partition
+  raw: "df /var/log | tail -1 | awk '{print $1}' | grep -v '^/$' && echo 'SEPARATE' || echo 'NOT_SEPARATE'"
+  register: varlog_partition_check
+  changed_when: false
+
+- name: Check /home is separate partition
+  raw: "df /home | tail -1 | awk '{print $1}' | grep -v '^/$' && echo 'SEPARATE' || echo 'NOT_SEPARATE'"
+  register: home_partition_check
+  changed_when: false
+
+# Package Management Security
+- name: Check GPG check enabled in DNF
+  raw: "grep -E '^gpgcheck\\s*=\\s*1' /etc/dnf/dnf.conf && echo 'ENABLED' || echo 'DISABLED'"
+  register: dnf_gpgcheck
+  changed_when: false
+
+- name: Check for unauthorized packages
+  raw: "rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\\n' | wc -l"
+  register: installed_packages_count
+  changed_when: false
+
+# Service Security Checks
+- name: Check SSH service status
+  raw: "systemctl is-active sshd 2>/dev/null || echo 'INACTIVE'"
+  register: ssh_service_status
+  changed_when: false
+
+- name: Check SSH configuration - Root login
+  raw: "grep -E '^PermitRootLogin' /etc/ssh/sshd_config | awk '{print $2}' || echo 'NOT_SET'"
+  register: ssh_root_login
+  changed_when: false
+
+- name: Check SSH configuration - Protocol version
+  raw: "grep -E '^Protocol' /etc/ssh/sshd_config | awk '{print $2}' || echo '2'"
+  register: ssh_protocol
+  changed_when: false
+
+# Firewall Security
+- name: Check firewalld status
+  raw: "systemctl is-active firewalld 2>/dev/null || echo 'INACTIVE'"
+  register: firewalld_status
+  changed_when: false
+
+- name: Check iptables rules count
+  raw: "iptables -L | grep -c '^[A-Z]' || echo '0'"
+  register: iptables_rules_count
+  changed_when: false
+
+# User Account Security
+- name: Check for users with UID 0
+  raw: "awk -F: '$3 == 0 {print $1}' /etc/passwd | tr '\\n' ',' | sed 's/,$//'"
+  register: uid_zero_users
+  changed_when: false
+
+- name: Check password aging policy
+  raw: "grep -E '^PASS_MAX_DAYS' /etc/login.defs | awk '{print $2}' || echo 'NOT_SET'"
+  register: password_max_days
+  changed_when: false
+
+- name: Check for accounts without passwords
+  raw: "awk -F: '$2 == \"\" {print $1}' /etc/shadow | tr '\\n' ',' | sed 's/,$//'"
+  register: accounts_no_password
+  changed_when: false
+
+# SELinux Security
+- name: Check SELinux status
+  raw: "getenforce 2>/dev/null || echo 'UNKNOWN'"
+  register: selinux_status
+  changed_when: false
+
+- name: Check SELinux policy
+  raw: "sestatus 2>/dev/null | grep 'Current mode' | awk '{print $3}' || echo 'UNKNOWN'"
+  register: selinux_policy
+  changed_when: false
+
+# Log Security
+- name: Check rsyslog service status
+  raw: "systemctl is-active rsyslog 2>/dev/null || echo 'INACTIVE'"
+  register: rsyslog_status
+  changed_when: false
+
+- name: Check for world-writable files in system directories
+  raw: "find /etc /usr /bin /sbin -perm -002 -type f 2>/dev/null | head -10 | tr '\\n' ',' | sed 's/,$//'"
+  register: world_writable_files
+  changed_when: false
+
+# Network Security
+- name: Check for listening services
+  raw: "netstat -tlnp 2>/dev/null | grep LISTEN | wc -l || ss -tlnp | grep LISTEN | wc -l"
+  register: listening_services_count
+  changed_when: false
+
+- name: Check for IPv4 forwarding
+  raw: "sysctl net.ipv4.ip_forward | awk '{print $3}'"
+  register: ipv4_forwarding
+  changed_when: false
+
+# System Updates
+- name: Check for available updates
+  raw: "dnf check-update 2>/dev/null | grep -c '^[a-zA-Z]' || echo '0'"
+  register: available_updates
+  changed_when: false
+
+# Kernel Security
+- name: Check kernel version
+  raw: "uname -r"
+  register: kernel_version
+  changed_when: false
+
+- name: Check for core dumps configuration
+  raw: "grep -E '^\\*.*core' /etc/security/limits.conf | awk '{print $4}' || echo 'NOT_SET'"
+  register: core_dumps_config
+  changed_when: false
+
+# Generate JSON output for this host
+- name: Generate JSON results
+  local_action:
+    module: copy
+    content: |
+      {
+        "hostname": "{{ inventory_hostname }}",
+        "timestamp": "{{ timestamp }}",
+        "audit_date": "{{ ansible_date_time.date if ansible_date_time is defined else lookup('pipe', 'date +%Y-%m-%d') }}",
+        "audit_time": "{{ ansible_date_time.time if ansible_date_time is defined else lookup('pipe', 'date +%H:%M:%S') }}",
+        "filesystem_security": {
+          "tmp_separate_partition": "{{ tmp_partition_check.stdout.strip() }}",
+          "tmp_mount_options": "{{ tmp_mount_options.stdout.strip() }}",
+          "varlog_separate_partition": "{{ varlog_partition_check.stdout.strip() }}",
+          "home_separate_partition": "{{ home_partition_check.stdout.strip() }}"
+        },
+        "package_management": {
+          "dnf_gpgcheck_enabled": "{{ dnf_gpgcheck.stdout.strip() }}",
+          "installed_packages_count": {{ installed_packages_count.stdout.strip() }}
+        },
+        "service_security": {
+          "ssh_service_status": "{{ ssh_service_status.stdout.strip() }}",
+          "ssh_root_login": "{{ ssh_root_login.stdout.strip() }}",
+          "ssh_protocol": "{{ ssh_protocol.stdout.strip() }}"
+        },
+        "firewall_security": {
+          "firewalld_status": "{{ firewalld_status.stdout.strip() }}",
+          "iptables_rules_count": {{ iptables_rules_count.stdout.strip() }}
+        },
+        "user_security": {
+          "uid_zero_users": "{{ uid_zero_users.stdout.strip() }}",
+          "password_max_days": "{{ password_max_days.stdout.strip() }}",
+          "accounts_without_password": "{{ accounts_no_password.stdout.strip() }}"
+        },
+        "selinux_security": {
+          "selinux_status": "{{ selinux_status.stdout.strip() }}",
+          "selinux_policy": "{{ selinux_policy.stdout.strip() }}"
+        },
+        "log_security": {
+          "rsyslog_status": "{{ rsyslog_status.stdout.strip() }}",
+          "world_writable_files": "{{ world_writable_files.stdout.strip() }}"
+        },
+        "network_security": {
+          "listening_services_count": {{ listening_services_count.stdout.strip() }},
+          "ipv4_forwarding": "{{ ipv4_forwarding.stdout.strip() }}"
+        },
+        "system_updates": {
+          "available_updates_count": {{ available_updates.stdout.strip() }}
+        },
+        "kernel_security": {
+          "kernel_version": "{{ kernel_version.stdout.strip() }}",
+          "core_dumps_config": "{{ core_dumps_config.stdout.strip() }}"
+        }
+      }
+    dest: "{{ audit_results_dir }}/{{ inventory_hostname }}_audit.json"

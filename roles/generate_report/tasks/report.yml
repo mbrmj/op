@@ -1,0 +1,166 @@
+- name: Create reports directory
+  file:
+    path: "{{ reports_dir }}"
+    state: directory
+
+- name: Find all JSON audit files
+  find:
+    paths: "{{ audit_results_dir }}"
+    patterns: "*_audit.json"
+  register: json_files
+
+- name: Read all JSON audit results
+  include_vars:
+    file: "{{ item.path }}"
+    name: "audit_{{ item.path | basename | regex_replace('_audit.json', '') | regex_replace('[^a-zA-Z0-9]', '_') }}"
+  loop: "{{ json_files.files }}"
+  when: json_files.files is defined
+
+- name: Combine all audit results
+  set_fact:
+    all_audit_results: "{{ all_audit_results | default([]) + [lookup('file', item.path) | from_json] }}"
+  loop: "{{ json_files.files }}"
+  when: json_files.files is defined
+
+- name: Generate consolidated JSON report
+  copy:
+    content: |
+      {
+        "audit_summary": {
+          "total_hosts": {{ all_audit_results | length }},
+          "audit_date": "{{ ansible_date_time.date }}",
+          "audit_time": "{{ ansible_date_time.time }}",
+          "generated_by": "RHEL9-Security-Audit-Playbook"
+        },
+        "results": {{ all_audit_results | to_nice_json }}
+      }
+    dest: "{{ reports_dir }}/consolidated_audit_{{ timestamp }}.json"
+
+- name: Create CSV header
+  set_fact:
+    csv_header: |
+      Hostname,Audit Date,TMP Separate,TMP Mount Options,VarLog Separate,Home Separate,DNF GPGCheck,Installed Packages,SSH Status,SSH Root Login,SSH Protocol,Firewalld Status,IPTables Rules,UID Zero Users,Password Max Days,No Password Accounts,SELinux Status,SELinux Policy,Rsyslog Status,World Writable Files,Listening Services,IPv4 Forwarding,Available Updates,Kernel Version,Core Dumps Config
+
+- name: Generate CSV content
+  set_fact:
+    csv_content: |
+      {{ csv_header }}
+      {% for result in all_audit_results %}
+      {{ result.hostname }},{{ result.audit_date }},{{ result.filesystem_security.tmp_separate_partition }},{{ result.filesystem_security.tmp_mount_options | default('') }},{{ result.filesystem_security.varlog_separate_partition }},{{ result.filesystem_security.home_separate_partition }},{{ result.package_management.dnf_gpgcheck_enabled }},{{ result.package_management.installed_packages_count }},{{ result.service_security.ssh_service_status }},{{ result.service_security.ssh_root_login }},{{ result.service_security.ssh_protocol }},{{ result.firewall_security.firewalld_status }},{{ result.firewall_security.iptables_rules_count }},{{ result.user_security.uid_zero_users | default('') }},{{ result.user_security.password_max_days }},{{ result.user_security.accounts_without_password | default('') }},{{ result.selinux_security.selinux_status }},{{ result.selinux_security.selinux_policy }},{{ result.log_security.rsyslog_status }},{{ result.log_security.world_writable_files | default('') }},{{ result.network_security.listening_services_count }},{{ result.network_security.ipv4_forwarding }},{{ result.system_updates.available_updates_count }},{{ result.kernel_security.kernel_version }},{{ result.kernel_security.core_dumps_config }}
+      {% endfor %}
+
+- name: Save CSV report
+  copy:
+    content: "{{ csv_content }}"
+    dest: "{{ reports_dir }}/security_audit_{{ timestamp }}.csv"
+
+- name: Generate Security Summary Report
+  copy:
+    content: |
+      # RHEL 9 Security Audit Summary Report
+      **Audit Date:** {{ ansible_date_time.date }} {{ ansible_date_time.time }}
+      **Total Hosts Audited:** {{ all_audit_results | length }}
+      
+      ## Critical Security Findings
+      
+      ### Hosts with Root SSH Login Enabled
+      {% set root_ssh_hosts = [] %}
+      {% for result in all_audit_results %}
+      {% if result.service_security.ssh_root_login == 'yes' %}
+      {% set _ = root_ssh_hosts.append(result.hostname) %}
+      {% endif %}
+      {% endfor %}
+      {% if root_ssh_hosts %}
+      **CRITICAL:** {{ root_ssh_hosts | length }} hosts have root SSH login enabled:
+      {% for host in root_ssh_hosts %}
+      - {{ host }}
+      {% endfor %}
+      {% else %}
+      ✅ No hosts have root SSH login enabled
+      {% endif %}
+      
+      ### SELinux Status
+      {% set selinux_disabled = [] %}
+      {% for result in all_audit_results %}
+      {% if result.selinux_security.selinux_status != 'Enforcing' %}
+      {% set _ = selinux_disabled.append(result.hostname) %}
+      {% endif %}
+      {% endfor %}
+      {% if selinux_disabled %}
+      **WARNING:** {{ selinux_disabled | length }} hosts don't have SELinux in Enforcing mode:
+      {% for host in selinux_disabled %}
+      - {{ host }}
+      {% endfor %}
+      {% else %}
+      ✅ All hosts have SELinux in Enforcing mode
+      {% endif %}
+      
+      ### Firewall Status
+      {% set firewall_inactive = [] %}
+      {% for result in all_audit_results %}
+      {% if result.firewall_security.firewalld_status != 'active' %}
+      {% set _ = firewall_inactive.append(result.hostname) %}
+      {% endif %}
+      {% endfor %}
+      {% if firewall_inactive %}
+      **WARNING:** {{ firewall_inactive | length }} hosts have inactive firewall:
+      {% for host in firewall_inactive %}
+      - {{ host }}
+      {% endfor %}
+      {% else %}
+      ✅ All hosts have active firewall
+      {% endif %}
+      
+      ### System Updates
+      {% set hosts_need_updates = [] %}
+      {% for result in all_audit_results %}
+      {% if result.system_updates.available_updates_count | int > 0 %}
+      {% set _ = hosts_need_updates.append(result.hostname) %}
+      {% endif %}
+      {% endfor %}
+      {% if hosts_need_updates %}
+      **INFO:** {{ hosts_need_updates | length }} hosts have available updates:
+      {% for host in hosts_need_updates %}
+      - {{ host }}
+      {% endfor %}
+      {% else %}
+      ✅ All hosts are up to date
+      {% endif %}
+      
+      ### Partition Security
+      {% set tmp_not_separate = [] %}
+      {% for result in all_audit_results %}
+      {% if result.filesystem_security.tmp_separate_partition == 'NOT_SEPARATE' %}
+      {% set _ = tmp_not_separate.append(result.hostname) %}
+      {% endif %}
+      {% endfor %}
+      {% if tmp_not_separate %}
+      **WARNING:** {{ tmp_not_separate | length }} hosts don't have /tmp as separate partition:
+      {% for host in tmp_not_separate %}
+      - {{ host }}
+      {% endfor %}
+      {% endif %}
+      
+      ---
+      *Report generated by RHEL 9 Security Audit Playbook*
+    dest: "{{ reports_dir }}/security_summary_{{ timestamp }}.md"
+
+- name: Display completion message
+  debug:
+    msg: |
+      ===== RHEL 9 Security Audit Complete =====
+      
+      Results saved in:
+      📁 JSON Results: {{ audit_results_dir }}/
+      📊 Consolidated JSON: {{ reports_dir }}/consolidated_audit_{{ timestamp }}.json
+      📈 CSV Report: {{ reports_dir }}/security_audit_{{ timestamp }}.csv
+      📋 Summary Report: {{ reports_dir }}/security_summary_{{ timestamp }}.md
+      
+      Total hosts audited: {{ all_audit_results | length }}
+      
+      To open the CSV in Excel:
+      1. Open Excel
+      2. File > Open > {{ reports_dir }}/security_audit_{{ timestamp }}.csv
+      3. Use 'Text Import Wizard' if needed
+      
+      ========================================

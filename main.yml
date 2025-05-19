@@ -1,0 +1,14 @@
+---
+# main_security_audit.yml - Main playbook for RHEL 9 Security Audit
+- name: Execute Security Audit Commands
+  hosts: all
+  gather_facts: false
+  roles:
+    - role: get_info
+
+
+- name: Generate Report
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: generate_report
